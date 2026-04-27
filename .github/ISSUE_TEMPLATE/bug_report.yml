@@ -1,0 +1,81 @@
+name: Bug Report
+description: Report an error, typo, or unclear explanation in the course
+title: "[BUG] "
+labels: ["bug"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping improve the Python Course!
+
+  - type: dropdown
+    id: module
+    attributes:
+      label: Module
+      description: Which module contains the issue?
+      options:
+        - "01: Python Fundamentals"
+        - "02: Functions and Scope"
+        - "03: Data Structures"
+        - "04: Object-Oriented Programming"
+        - "05: File Handling & Exceptions"
+        - "06: Standard Library"
+        - "07: Virtual Environments & Packages"
+        - "08: Testing"
+        - "09: Debugging & Performance"
+        - "10: APIs & Web"
+        - "11: Data Analysis"
+        - "12: Scripting & Automation"
+        - "13: Version Control & Git"
+        - "14: Production Code"
+        - "15: Algorithms & DSA"
+        - "PROJECTS"
+        - "README"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What is the issue? (typo, unclear explanation, broken code example, etc.)
+      placeholder: |
+        Example: The list comprehension example on line 45 has incorrect syntax.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should happen instead?
+      placeholder: |
+        Example: The code should run without errors and produce [1, 4, 9, 16, 25].
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happens?
+      placeholder: |
+        Example: SyntaxError: invalid syntax
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Any other relevant information (Python version, environment, etc.)
+      placeholder: |
+        Python 3.10, Windows 11
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I have searched for existing issues
+          required: true
+        - label: This is a course content issue, not a general Python question
+          required: true
