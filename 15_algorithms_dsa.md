@@ -858,6 +858,64 @@ print(word_search(board, "ABCB"))    # False
 
 ---
 
+## Interview Prep — Top Questions for Algorithms and DSA
+
+> This module is the most heavily tested in FAANG/Big-Tech coding interviews. Master these patterns.
+
+**Q1: What is Big O notation and why does it matter in system design?**
+Big O describes **worst-case growth rate** of time/space as input size n grows. It matters in system design because at scale, O(n²) on 10M records = 100T operations — hours. O(n log n) = 230M operations — milliseconds. Always analyze complexity before choosing an algorithm. Common: O(1) hash lookup, O(log n) binary search, O(n) linear scan, O(n log n) sorting, O(n²) nested loops.
+
+**Q2: When do you use a stack vs a queue?**
+- **Stack** (LIFO — Last In First Out): function call stack, undo operations, DFS, balanced parentheses, expression evaluation. Python: `list` with `.append()` / `.pop()`
+- **Queue** (FIFO — First In First Out): BFS, task scheduling, rate limiting, message queues. Python: `collections.deque` with `.append()` / `.popleft()` (O(1) both ends)
+- **Priority Queue** (min/max heap): Dijkstra's, top-K elements, scheduling by priority. Python: `heapq` (min-heap)
+
+**Q3: What is the sliding window technique? Give a real-world example.**
+Maintain a window (subarray/substring) that moves through the data without reprocessing elements. O(n) instead of O(n²) brute force. Real-world: **rate limiting** — count requests in the last 60 seconds as the window slides; **network monitoring** — max throughput in any 5-second window; **stream analytics** — running average over last N data points. Classic: longest substring without repeating characters.
+
+**Q4: Explain dynamic programming. What are the two approaches?**
+DP solves problems with **overlapping subproblems** and **optimal substructure** by caching intermediate results.
+- **Top-down (memoization)**: Recursive solution + cache (`@lru_cache`). Intuitive, only computes needed subproblems.
+- **Bottom-up (tabulation)**: Fill a DP table iteratively from base cases. More space-efficient, no recursion overhead.
+Examples: Fibonacci, coin change, longest common subsequence, knapsack. Recognize DP when: problem asks for min/max/count and can be broken into smaller overlapping versions.
+
+**Q5: What is the difference between BFS and DFS? When do you use each?**
+- **BFS** (queue, level-by-level): **Shortest path** in unweighted graphs, level-order traversal, word ladder, connected components. Uses O(width) space.
+- **DFS** (stack/recursion, depth-first): **Cycle detection**, topological sort, path existence, tree traversal (in/pre/post-order), backtracking (permutations, N-queens). Uses O(depth) space.
+Key rule: **BFS for shortest path**, **DFS for exhaustive search/backtracking**.
+
+**Q6: How does binary search work and when can you apply it?**
+Binary search requires a **sorted/monotonic** structure. Halve the search space each step: O(log n). Template: `lo, hi = 0, n-1`; `while lo <= hi`; `mid = (lo+hi)//2`; compare and update `lo` or `hi`. Apply beyond sorted arrays: **"find minimum/maximum that satisfies a condition"** — any monotonic decision function can be binary searched. Real-world: finding capacity/threshold in system design.
+
+**Q7: What is a hash map and when does O(1) become O(n)?**
+Hash maps use `hash(key) % capacity` to map keys to slots. Average O(1) insert/lookup. Worst case O(n) when: many keys collide to the same slot (hash collision DoS), load factor exceeds threshold causing full rehash (Python rehashes at ~66% load). Python's `dict` uses open addressing with a growth factor, ensuring amortized O(1). Security tip: Python randomizes string hashes per-process (PYTHONHASHSEED) to prevent DoS attacks.
+
+**Q8: What are the two-pointer and fast-slow pointer patterns?**
+- **Two pointers (converging)**: Sorted array, find pair summing to target. `left=0, right=n-1`, move based on sum comparison. O(n).
+- **Two pointers (sliding window)**: Variable window on array/string. Expand right, shrink left when condition violated.
+- **Fast-slow (Floyd's cycle)**: Detect cycle in linked list. Fast moves 2 steps, slow moves 1. If they meet, there's a cycle. Also finds cycle start, middle of linked list.
+
+**Q9: How do you approach a coding interview problem systematically?**
+1. **Clarify** inputs/outputs, edge cases, constraints (5 min)
+2. **Brute force** first — state the naive O(n²) or O(n!) solution
+3. **Identify the pattern**: sorted? → binary search. subarray? → sliding window. graph? → BFS/DFS. optimal substructure? → DP.
+4. **Optimize** with a better data structure or algorithm
+5. **Code** cleanly with meaningful variable names
+6. **Test** with examples, edge cases (empty, single element, duplicates)
+7. **Analyze** final time and space complexity
+
+**Q10: What data structures power common system design components?**
+- **Cache (LRU)**: HashMap + Doubly Linked List — O(1) get/put
+- **Rate limiter**: Sliding window Counter with timestamp deque
+- **Auto-complete**: Trie (prefix tree)
+- **Leaderboard / Top-K**: Min-heap of size K
+- **Social graph**: Adjacency list (dict of sets)
+- **Event stream deduplication**: Bloom filter or HashSet
+- **Database index**: B-tree (disk-friendly balanced BST)
+- **URL shortener**: HashMap with collision handling
+
+---
+
 ## Module Summary
 
 | Algorithm | Time | Space | Use Case |
@@ -886,3 +944,15 @@ print(word_search(board, "ABCB"))    # False
 8. What is a sliding window and when is it applicable?
 9. What does Dijkstra's algorithm assume about edge weights?
 10. What is the time complexity of inserting into a BST in the worst case?
+
+**Answers:**
+1. O(log n). Binary search halves the search space on every comparison. Starting with n elements, after k comparisons you have n/2^k elements. When n/2^k = 1, k = log₂(n). This requires the array to be **sorted** — you can only discard half if you know which half the target is in.
+2. Sets use a **hash table**: `hash(x)` maps x to a slot in O(1) time — constant regardless of set size. Lists use **linear search**: Python checks each element from start to end, taking O(n) time proportional to list size. This is why converting a list to a set before repeated membership tests is a classic optimization.
+3. **BFS** (queue, level by level): Use when you need the **shortest path** in an unweighted graph, or when the solution is near the root (fewer levels to explore). **DFS** (stack/recursion, depth first): Use for **cycle detection**, **topological sort**, **backtracking** (maze solving, permutations), or when any solution is acceptable regardless of depth. DFS uses O(depth) space; BFS uses O(width) space.
+4. **Memoisation** caches the results of function calls for specific inputs — if the same input is seen again, return the cached result instead of recomputing. It's the **top-down** approach to Dynamic Programming: start with the recursive solution, add a cache (`@lru_cache` or a dict). Bottom-up DP fills a table iteratively. Both avoid recomputing overlapping subproblems.
+5. Use a heap when you need **repeated access to the minimum or maximum element** without sorting the whole collection. Examples: top-K elements (maintain a heap of size K), priority queues, Dijkstra's algorithm. Sorting is O(n log n) once; a heap gives O(log n) push/pop with O(1) peek — optimal for streaming/online scenarios.
+6. **Merge sort**: O(n) space — needs an auxiliary array for merging. Always O(n log n) regardless of input order. **Quick sort**: O(log n) space (stack frames for recursion) on average — but O(n) worst case with a bad pivot. Quick sort is in-place; merge sort is not. For production, Python's `sorted()` uses Timsort (hybrid merge sort) — always O(n log n).
+7. The two-pointer technique uses two indices that start at different positions and move toward each other (or in the same direction). Solves: finding pairs that sum to a target in a sorted array, palindrome checks, merging sorted arrays, removing duplicates from a sorted array. Reduces O(n²) naive nested-loop solutions to O(n).
+8. A sliding window maintains a contiguous subarray/substring of variable or fixed size as it slides across the input. Use it when the problem involves a **contiguous subarray** and asks for max/min/sum/count of elements satisfying some condition. Examples: max sum subarray of size k, longest substring without repeating characters, minimum window substring. Turns O(n²) brute force to O(n).
+9. Dijkstra's assumes **all edge weights are non-negative**. It greedily settles the shortest path to the nearest unvisited node — this logic breaks with negative weights (a later path could become shorter). For negative weights, use **Bellman-Ford** (O(VE)); for negative cycles, Bellman-Ford detects them.
+10. O(n) worst case — when the BST degenerates into a linked list (inserting already-sorted values: 1, 2, 3, 4... creates a right-skewed tree). Average case is O(log n) for a balanced tree. This is why **balanced BSTs** (AVL, Red-Black) or Python's `sortedcontainers.SortedList` are used in practice — they guarantee O(log n) operations.

@@ -17,6 +17,37 @@ By the end of this module you will be able to:
 
 ---
 
+## The Big Picture — APIs as System Boundaries
+
+```
+Every modern application is a network of services communicating over HTTP.
+Understanding APIs means understanding how systems talk to each other.
+
+Client (browser/mobile/CLI)
+    │
+    │  HTTP Request (verb + URL + headers + body)
+    ▼
+API Gateway / Load Balancer
+    │
+    ├── /users  → User Service (FastAPI)
+    ├── /orders → Order Service (Flask)
+    └── /search → Search Service (Elasticsearch)
+
+Why REST?
+  - Stateless: each request contains everything needed
+  - Cacheable: GET responses can be cached by proxies
+  - Uniform interface: same verbs everywhere
+  - Platform-agnostic: any language can speak HTTP
+
+Why FastAPI?
+  - Async-first: handles thousands of concurrent connections
+  - Auto-documentation: OpenAPI spec generated from type hints
+  - Pydantic: input validation at the boundary (the most important place)
+  - 3x faster than Flask for most workloads
+```
+
+---
+
 ## 10.1 HTTP Fundamentals
 
 ### Conceptual Foundation
@@ -567,6 +598,34 @@ Build a FastAPI CRUD API for a product catalog. Products have: `id`, `name`, `pr
 
 ---
 
+## Interview Prep — Top Questions for APIs and Web
+
+**Q1: What makes an API RESTful?**
+6 constraints: **Stateless** (each request contains all needed info — no server-side session), **Client-Server** separation, **Cacheable** (GET responses declare cacheability), **Uniform Interface** (resources identified by URIs, standard methods), **Layered System** (client can't tell if it's hitting a server or a proxy), **Code on Demand** (optional: server can send executable code). Statelessness is the most important — it enables horizontal scaling.
+
+**Q2: What is the difference between PUT and PATCH?**
+PUT replaces the **entire resource** — you must send all fields. PATCH applies a **partial update** — only send the fields to change. PUT is idempotent (same request twice = same result). PATCH can be non-idempotent. In practice: always use PATCH for partial updates (saves bandwidth and avoids accidentally zeroing un-sent fields).
+
+**Q3: Explain FastAPI's dependency injection system.**
+`Depends(my_func)` in a route parameter tells FastAPI to call `my_func` before the route handler and inject the return value. Dependencies are cached per request (unless `use_cache=False`). Supports: auth token extraction, DB session management, rate limiting, permission checks. Dependencies can depend on other dependencies — FastAPI builds a directed acyclic graph and resolves in order.
+
+**Q4: How does Pydantic v2 validate data? What happens on validation failure?**
+Pydantic creates a C-extension validator from your model's type annotations and `Field()` constraints. On validation, it coerces compatible types (e.g., `"42"` → `int(42)`) and rejects incompatible ones. On failure, raises `ValidationError` with a list of all errors (field, value, error type). FastAPI automatically returns these as HTTP 422 Unprocessable Entity with a structured JSON body.
+
+**Q5: What is idempotency and which HTTP methods should be idempotent?**
+An operation is **idempotent** if executing it multiple times produces the same result as executing it once. GET, PUT, DELETE should be idempotent. POST is NOT idempotent (each call creates a new resource). PATCH technically isn't guaranteed idempotent. Idempotency is critical for retry logic — if a network timeout causes you to retry a request, idempotent requests are safe to retry; POST creates duplicates.
+
+**Q6: How do you test a FastAPI application without running an actual server?**
+Use `httpx.AsyncClient` with `ASGITransport(app=app)` and `base_url="http://test"`. This makes real HTTP requests but in-process (no network, no port binding). Much faster than spinning up a server, works in CI. Use `@pytest.fixture` to create the client and `@pytest.mark.asyncio` for async tests. This tests the full middleware/route stack.
+
+**Q7: What is the difference between synchronous and asynchronous endpoints in FastAPI?**
+FastAPI runs `async def` routes in the event loop directly (non-blocking). `def` (sync) routes are run in a separate thread pool via `asyncio.run_in_executor()`. Use `async def` for I/O operations (DB queries, HTTP calls) using async drivers. Use `def` for CPU-bound or sync-only code. Mixing wrong (blocking I/O in `async def`) will starve the event loop.
+
+**Q8: What HTTP status code should a DELETE return when the resource is already deleted?**
+Two valid answers: **204 No Content** (idempotent — deleting again returns same success) or **404 Not Found** (the resource doesn't exist). The 204 approach is preferred for idempotent APIs where clients may retry. 404 is technically more accurate on the second call. Whichever you choose, be **consistent** and document it.
+
+---
+
 ## Module Summary
 
 | Concept | Key Takeaway |
@@ -594,3 +653,15 @@ Build a FastAPI CRUD API for a product catalog. Products have: `id`, `name`, `pr
 8. What does `model_dump(exclude_none=True)` do in Pydantic?
 9. Why should you have separate request and response schemas?
 10. What is ASGI and how does it differ from WSGI?
+
+**Answers:**
+1. PUT replaces the entire resource with the provided data (all fields required). PATCH partially updates a resource — only the fields you provide are changed. PUT is idempotent; PATCH semantically can be non-idempotent.
+2. Without a timeout, a request can hang forever if the server is unresponsive. This blocks the thread (or event loop coroutine), eventually exhausting connection pools and crashing the application under load.
+3. `raise_for_status()` raises `requests.HTTPError` if the response has a 4xx or 5xx status code. Without it, `requests` silently succeeds even for error responses — you'd need to check `response.status_code` manually.
+4. `201 Created`. The response body should contain the created resource, and ideally a `Location` header pointing to the new resource's URL.
+5. `Field(..., ge=0)` adds a validation constraint: the field is required (`...`) and must be **g**reater than or **e**qual to 0. Pydantic raises a `ValidationError` if a value doesn't meet this constraint.
+6. When FastAPI sees `Depends(my_func)` in a route parameter, it calls `my_func` and injects its return value into the route. If `my_func` is a generator with `yield`, everything before `yield` is setup and after `yield` is teardown (like a fixture). Dependencies can depend on other dependencies.
+7. `requests.get()` creates a new connection for each request. `Session().get()` reuses a connection pool (TCP keep-alive), shares headers/cookies/auth across requests, and is significantly more efficient for multiple calls to the same host.
+8. `model_dump(exclude_none=True)` serializes the model to a dict, excluding any fields that are `None`. This is used for PATCH operations so that only explicitly provided fields are included in the update — `None` means "not provided", not "set to null".
+9. Request schemas validate what comes IN (strict, minimal — only accept what you need). Response schemas control what goes OUT (never expose internal IDs, passwords, or implementation details). Mixing them would expose sensitive fields or accept fields that should be read-only.
+10. ASGI (Asynchronous Server Gateway Interface) supports async Python web frameworks (FastAPI, Starlette). WSGI (Web Server Gateway Interface) is synchronous-only (Flask, Django). ASGI can handle WebSockets and long-polling; WSGI cannot. Uvicorn is an ASGI server; Gunicorn is typically WSGI.

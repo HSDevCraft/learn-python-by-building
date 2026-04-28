@@ -17,6 +17,29 @@ By the end of this module you will be able to:
 
 ---
 
+## The Big Picture — Debug, Measure, Then Optimize
+
+```
+Common mistake:  Guess where the slow code is → optimize it → no speedup
+Correct approach: Profile first → find the ACTUAL bottleneck → optimize
+
+"Premature optimization is the root of all evil" — Donald Knuth
+
+Workflow:
+  1. WRITE correct code (tests pass)
+  2. PROFILE (cProfile, timeit) — find where 90% of time is spent
+  3. OPTIMIZE that specific bottleneck (algorithm, data structure, caching)
+  4. MEASURE again — verify the improvement
+  5. REPEAT until fast enough
+
+Logging workflow:
+  Development:  print() is fine for one-off debugging
+  Production:   logging/structlog with structured JSON output
+  Why?         Logs have levels, timestamps, context — searchable in log aggregators
+```
+
+---
+
 ## 9.1 Debugging
 
 ### `pdb` — Python Debugger
@@ -533,6 +556,37 @@ print(f"Speedup: {t_slow / t_fast:.1f}x")   # ~100x or more
 
 ---
 
+## Interview Prep — Top Questions for Debugging and Performance
+
+**Q1: What is the GIL and when does it matter?**
+The GIL (Global Interpreter Lock) is a mutex in CPython that allows only **one thread to execute Python bytecode at a time**. For CPU-bound code (computation), threading doesn't parallelize — use `multiprocessing`. For I/O-bound code (network, disk), the GIL is **released during I/O waits**, so threads do give concurrency. Alternatives: `asyncio` (single-threaded event loop), `ProcessPoolExecutor`, or Cython/C extensions.
+
+**Q2: What is the difference between `threading` and `multiprocessing`?**
+- **Threading**: Shared memory space, GIL prevents true CPU parallelism, lightweight (low overhead), use for I/O-bound work
+- **Multiprocessing**: Separate memory spaces (no GIL), true CPU parallelism, heavier overhead, use for CPU-bound work
+- **asyncio**: Single-threaded cooperative concurrency, lowest overhead, use for high-concurrency I/O (web servers, scrapers)
+
+**Q3: How do you profile a Python application to find bottlenecks?**
+1. `cProfile` / `-m cProfile`: function-level call counts and cumulative time
+2. `line_profiler` (`@profile`, `kernprof`): line-by-line timing within a function
+3. `timeit`: micro-benchmark two approaches
+4. `snakeviz`: visualizes cProfile output as a flame graph
+Workflow: Profile first → identify the 20% of code causing 80% of slowness → optimize only that.
+
+**Q4: Why is `"".join(parts)` O(n) but `result += part` in a loop O(n²)?**
+Strings are **immutable** in Python. Each `+=` creates a brand-new string by copying all existing characters plus the new one. After n iterations, you've done 1+2+3+...+n = O(n²) copy operations. `"".join(parts)` allocates the final string once (knowing the total size) and fills it in one C-level pass — O(n).
+
+**Q5: What is `asyncio` and when should you use it vs threads?**
+`asyncio` uses a single-threaded **event loop** with cooperative multitasking. Coroutines `await` I/O operations, yielding control to the loop which runs other coroutines. No context switching overhead. Use for: web servers, concurrent API calls, WebSockets, anything with many concurrent I/O operations. Don't use for: CPU-bound work (blocks the event loop), or when you need true parallelism.
+
+**Q6: What is `@functools.lru_cache` and what are its constraints?**
+`@lru_cache(maxsize=128)` caches function return values keyed by arguments, evicting least-recently-used entries. Constraints: all arguments must be **hashable** (no lists, dicts). The function must be **pure** (same inputs always produce the same output with no side effects). Use `maxsize=None` for an unbounded cache. Check `func.cache_info()` for hit/miss statistics.
+
+**Q7: What is structured logging and why is it better than `print()` or plain `logging` in production?**
+Structured logging emits log events as **key-value JSON objects** (e.g., `{"event": "payment.failed", "amount": 99.9, "user_id": "u123"}`). Benefits: searchable and filterable in log aggregators (Elasticsearch, Splunk, Datadog) by any field; no regex needed; machine-parseable. `structlog` is the Python library for this. Plain `logging` emits unstructured strings that require regex to parse.
+
+---
+
 ## Module Summary
 
 | Tool/Technique | Use Case |
@@ -561,3 +615,15 @@ print(f"Speedup: {t_slow / t_fast:.1f}x")   # ~100x or more
 8. How do you profile a specific function without modifying the whole codebase?
 9. What is `sys.getsizeof()` and what does it NOT measure?
 10. How does `asyncio` achieve concurrency without multiple threads?
+
+**Answers:**
+1. The GIL (Global Interpreter Lock) is a mutex that allows only one thread to execute Python bytecode at a time. For CPU-bound work, it means threads can't truly run in parallel. For I/O-bound work, the GIL is released during I/O operations, so threading still provides speedup.
+2. Use `ProcessPoolExecutor` for CPU-bound tasks (computations) — each process has its own GIL so they run truly in parallel. Use `ThreadPoolExecutor` for I/O-bound tasks (network calls, disk) — threads share the GIL but release it during I/O waits, giving concurrent throughput.
+3. `x in my_list` is O(n) — Python scans elements one by one. `x in my_set` is O(1) average — uses a hash table. For 1M elements, the set is ~1M times faster.
+4. Strings are immutable in Python. `result += part` creates a **new string** on each iteration, copying all previous characters — O(n²) total. `"".join(parts)` allocates once and writes all parts in one C-level loop — O(n) total.
+5. `cProfile` shows the **call graph** — how much time each function spent, how many times it was called, and which functions called which. `timeit` only measures total elapsed time for a snippet — no breakdown by function.
+6. A generator expression `(x for x in ...)` returns a lazy iterator — values are computed one at a time, using O(1) memory. A list comprehension `[x for x in ...]` evaluates immediately and stores all results in a list — uses O(n) memory.
+7. `structlog` outputs structured (JSON) log events with key-value context. Standard `logging` outputs free-form strings. In microservices, structured logs can be parsed and queried in log aggregators (Elasticsearch, Splunk, Datadog) by field, while free-form strings require fragile regex parsing.
+8. Use `cProfile` as a context manager: `with cProfile.Profile() as pr: my_func()`. Or decorate with `@line_profiler.profile` and run with `kernprof -l -v`. No need to modify the whole codebase.
+9. `sys.getsizeof()` returns the size of the object itself in bytes. It does **NOT** include the size of objects referenced by it. For example, `sys.getsizeof([1, 2, 3])` returns the list overhead, not the size of the three integers it references.
+10. `asyncio` uses a single-threaded **event loop** with cooperative multitasking. When a coroutine hits `await` (e.g., `await response.read()`), it voluntarily suspends and the event loop runs another coroutine. No threads needed — the OS handles I/O notifications asynchronously via select/epoll.

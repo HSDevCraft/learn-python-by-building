@@ -17,9 +17,25 @@ By the end of this module you will be able to:
 
 ---
 
-## 8.1 Why Test?
+## The Big Picture — Why Testing Matters at Scale
 
-### Conceptual Foundation
+```
+Without tests:                    With tests:
+  Change code  → hope it works      Change code  → run tests  → confident
+  Ship quickly → break prod         Refactor     → tests catch regressions
+  Debug in prod → hours/days        Review PR    → tests are the spec
+
+Cost of fixing a bug:
+  During development:    $1
+  In code review:        $6
+  In QA:                 $15
+  In production:         $150+
+  (IBM Systems Science Institute)
+```
+
+---
+
+## 8.1 Why Test?
 
 Tests are **executable documentation** that verify your code does what you claim. They provide:
 - **Confidence** to refactor without breaking things
@@ -27,15 +43,22 @@ Tests are **executable documentation** that verify your code does what you claim
 - **Design pressure** — hard-to-test code is often poorly designed
 - **Living documentation** — tests show how code is meant to be used
 
-**Test pyramid:**
+**Test pyramid** — different layers, different tradeoffs:
 ```
         /\
-       /E2E\        Few — slow, expensive, test full system
+       /E2E\        Few   — Slow (minutes), fragile, full system path
       /------\
-     /  Integ  \    Some — test component interactions
+     /  Integ  \    Some  — Medium (seconds), real I/O, component boundaries
     /------------\
-   /  Unit tests  \ Many — fast, isolated, test one thing
+   /  Unit tests  \ Many  — Fast (milliseconds), isolated, one function/class
   /________________\
+
+Unit:        Does my function return the right value?
+Integration: Does my service interact with the DB correctly?
+E2E:         Does the full user workflow produce the expected UI result?
+
+System Design tip: a 70/20/10 split (unit/integration/e2e) gives the best
+coverage-to-speed ratio for most applications.
 ```
 
 ---
@@ -632,6 +655,37 @@ def test_invalid_urls(shortener, invalid_url):
 
 ---
 
+## Interview Prep — Top Questions for Testing
+
+**Q1: What is the difference between unit tests, integration tests, and E2E tests?**
+- **Unit**: Tests one function/class in isolation; all dependencies mocked; milliseconds; no I/O
+- **Integration**: Tests multiple components working together; real database/network; seconds
+- **E2E**: Tests a complete user workflow through the whole system; minutes; expensive to maintain
+Aim for 70/20/10 split. Unit tests give the fastest feedback loop; invest there first.
+
+**Q2: What is Test-Driven Development (TDD) and when should you use it?**
+TDD cycle: **Red** (write failing test) → **Green** (write minimum code to pass) → **Refactor** (clean up). The key insight: writing the test first forces you to design the API/interface before implementation. Use TDD for: new features, bug fixes (write a regression test first), complex business logic. Don't use for: exploratory code, prototypes.
+
+**Q3: How does pytest fixture injection work?**
+pytest scans test function parameter names at collection time. If a parameter name matches a `@pytest.fixture`-decorated function (in the same file or `conftest.py`), pytest calls that fixture and injects the return value. No imports needed. Fixtures can depend on other fixtures — pytest builds a dependency graph and calls them in order.
+
+**Q4: What is `unittest.mock.patch` and what is the key rule for using it?**
+`patch("target")` temporarily replaces the named object with a `Mock` during the test. The key rule: **patch where the name is USED, not where it's defined**. If `my_module.py` does `import requests` and you test `my_module.get_data()`, patch `"my_module.requests.get"`, not `"requests.get"`. Otherwise, the real `requests.get` still runs.
+
+**Q5: What is the difference between `Mock` and `MagicMock`?**
+`Mock` records calls and allows attribute access, but raises `TypeError` if you try to use it in contexts requiring dunder methods (`len(mock)`, `with mock as m`). `MagicMock` pre-configures all magic methods — `len()`, `iter()`, `__enter__`/`__exit__` all work automatically. Use `MagicMock` for context managers, iterables, anything that needs dunder methods.
+
+**Q6: What does test coverage measure and what are its limits?**
+Coverage measures what **percentage of your code lines are executed** by tests. 80-90% is a healthy target. Limits: 100% coverage doesn't mean correctness — a test can execute a line without asserting anything meaningful. Coverage misses edge cases in logic that execute the same line. It's a minimum bar, not a quality guarantee.
+
+**Q7: What is the AAA pattern in testing?**
+**Arrange** — set up the test data and system state. **Act** — call the function/method under test. **Assert** — verify the result. This structure makes tests self-documenting and easy to debug. Each test should test exactly ONE behavior — if a test fails, the name and structure immediately tell you what broke.
+
+**Q8: When should you mock vs use the real implementation?**
+Mock: external services (APIs, email, SMS), databases in unit tests, time (`datetime.now()`), filesystem operations that are slow/destructive. Use real: core business logic, data transformations, algorithms, anything you own. The rule: mock at the **boundary** of what you own. Don't mock internal implementation details.
+
+---
+
 ## Module Summary
 
 | Concept | Key Takeaway |
@@ -658,3 +712,15 @@ def test_invalid_urls(shortener, invalid_url):
 8. What is the TDD cycle and why is the "Red" step important?
 9. What does `pytest --cov-fail-under=80` do?
 10. Why should you mock external dependencies rather than call them in tests?
+
+**Answers:**
+1. A unit test isolates and tests a single function/class with no real I/O (database, network, filesystem). An integration test verifies that multiple components work together correctly, often using real I/O.
+2. A fixture is a function decorated with `@pytest.fixture` that provides setup data or objects. pytest injects it by **name-matching** the parameter in the test function signature — no import needed.
+3. Everything before `yield` is setup (runs before the test). Everything after `yield` is teardown (runs after the test, even if the test fails). It makes fixtures work like context managers.
+4. `scope` controls how often the fixture is created: `"function"` (default, once per test), `"class"` (once per class), `"module"` (once per file), `"session"` (once per entire test run). Use wider scope for expensive setups.
+5. Instead of writing the same test logic N times with different inputs, `@parametrize` runs one test function with N different data sets. pytest shows each combination as a separate test case in the output.
+6. `patch("module.function")` temporarily replaces `function` in `module`'s namespace with a `Mock`. The patch is removed after the `with` block (or test) ends. **Key rule:** patch where the name is *used*, not where it's defined.
+7. `Mock` creates a basic mock that records calls. `MagicMock` additionally implements all Python dunder/magic methods (`__len__`, `__iter__`, `__enter__`, etc.) automatically. Use `MagicMock` when the object needs to behave as a context manager or support `len()`, iteration, etc.
+8. Red (write failing test) → Green (write minimum code to pass) → Refactor (clean up). The "Red" step matters because writing the test first forces you to think about the API/interface before implementation, and confirms the test can actually detect failures.
+9. It makes the test run fail (exit code 1) if the measured test coverage falls below 80%. Used in CI/CD pipelines to enforce coverage standards.
+10. Real external dependencies (APIs, databases) make tests slow, non-deterministic (network might be down), and require infrastructure. Mocking makes tests fast, deterministic, and runnable without external services. Also: you shouldn't test what you don't own.

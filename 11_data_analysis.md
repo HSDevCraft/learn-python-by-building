@@ -17,6 +17,28 @@ By the end of this module you will be able to:
 
 ---
 
+## The Big Picture — Why NumPy/Pandas in System Design and Interviews
+
+```
+Data Science and ML interview questions consistently test:
+  - Vectorisation vs loops (NumPy) — can you eliminate Python-level iteration?
+  - GroupBy + aggregation (Pandas) — can you answer analytical questions with 1-2 lines?
+  - Memory efficiency — chunked reading, dtype optimization, generators
+  - Data cleaning — handling missing values, type coercion, duplicates
+  - Merge semantics — inner/left/right/outer joins and when each produces NaN
+
+System Design applications:
+  - Fraud detection: Pandas for feature engineering on transaction windows
+  - ETL pipelines: chunked CSV reads, vectorised transforms, Parquet output
+  - ML feature stores: NumPy arrays as the final format for model input
+  - Analytics dashboards: Pandas groupby → aggregated JSON → API response
+
+Key mindset: "If you're writing a for loop over a NumPy array or Pandas column,
+you're almost always doing it wrong."
+```
+
+---
+
 ## 11.1 NumPy — Numerical Python
 
 ```bash
@@ -551,6 +573,42 @@ def generate_employee_report(filepath: str) -> None:
 
 ---
 
+## Interview Prep — Top Questions for Data Analysis
+
+**Q1: Why is vectorisation critical in NumPy, and how do you identify non-vectorised code?**
+Vectorised operations apply C-level loops to entire arrays without Python object overhead (no per-element type checking, reference counting, or function dispatch). Non-vectorised code uses `for` loops over arrays or `.apply()` over DataFrames. Identify with `cProfile` or by looking for Python-level iteration over NumPy/Pandas objects. Rule: if you see `for item in array`, ask "can I express this as `array[mask]`, `np.where()`, or a vectorised Pandas method?"
+
+**Q2: Explain the difference between `df.loc`, `df.iloc`, and `df.at`.**
+- `df.loc[row_label, col_label]`: label-based; accepts boolean arrays, slices, lists of labels
+- `df.iloc[row_int, col_int]`: integer-position-based; always 0-indexed like Python lists  
+- `df.at[row_label, col_label]`: label-based single-value access (faster than `loc` for a single cell)
+- `df.iat[row_int, col_int]`: integer-position single-value access (fastest for scalar reads)
+
+**Q3: What is broadcasting in NumPy? When does it fail?**
+Broadcasting allows NumPy to operate on arrays with different shapes by expanding dimensions of size 1. Rules: align shapes from the right; dimensions must match or be 1. `(4,3) + (3,)` → broadcasts `(3,)` to `(4,3)`. `(4,3) + (4,)` fails because `4 ≠ 3` (after right-aligning). Always check `array.shape` when debugging broadcasting errors.
+
+**Q4: How do you handle missing data in a Pandas DataFrame?**
+- `df.isnull().sum()` — count NaNs per column
+- `df.dropna(subset=["col"])` — drop rows with NaN in specific columns
+- `df.fillna(0)` or `df.fillna(method="ffill")` — fill with value or forward-fill
+- `df["col"].interpolate()` — linear interpolation for time series
+Key question: WHY is data missing? MCAR (random) vs MAR (systematic) vs MNAR determines the right strategy.
+
+**Q5: What is the difference between `merge`, `join`, and `concat`?**
+- `pd.merge(left, right, on="key", how="inner")`: SQL-style join on column(s), full control
+- `df.join(other, how="left")`: join on index (or column) — shorthand for merge on index
+- `pd.concat([df1, df2], axis=0)`: stack DataFrames vertically (more rows) or horizontally (more cols)
+Use `merge` for most relational operations; `concat` for stacking similar-structured data.
+
+**Q6: How would you process a 10GB CSV file that doesn't fit in RAM?**
+Use `pd.read_csv(path, chunksize=100_000)` to iterate in chunks. Process each chunk (filter, aggregate, transform) and accumulate only summary results. Alternatively: convert to Parquet format (columnar, compressed, supports predicate pushdown) and use `pyarrow` or `dask` for out-of-core processing. For distributed scale, use PySpark or Dask.
+
+**Q7: Explain the difference between `groupby().agg()` and `groupby().transform()`.**
+- `.agg()` returns one row per group (reduced shape) — use for summaries
+- `.transform()` returns the same shape as the input — each row gets the group's aggregate value (useful for adding group statistics back to original rows: `df["group_mean"] = df.groupby("dept")["salary"].transform("mean")`)
+
+---
+
 ## Module Summary
 
 | Concept | Key Takeaway |
@@ -578,3 +636,15 @@ def generate_employee_report(filepath: str) -> None:
 8. What does `pd.cut()` do and when would you use it?
 9. How do you read a CSV file with 10 million rows without running out of RAM?
 10. What does `df.pivot_table(values="sales", index="region", columns="year", aggfunc="sum")` produce?
+
+**Answers:**
+1. NumPy arrays are stored in **contiguous C memory** (not Python objects). Operations call compiled C/Fortran loops under the hood — no Python object creation, reference counting, or type dispatch per element. A Python loop does all of these for every element, making it 10–100× slower for numerical work.
+2. Broadcasting lets NumPy perform operations on arrays with different shapes by automatically expanding smaller arrays. It fails (raises `ValueError`) when dimensions are incompatible: shapes must either match exactly, or one of them must be 1. E.g., `(3,4) + (3,)` fails; `(3,4) + (3,1)` succeeds (broadcast column-wise).
+3. `df.loc[row_label, col_label]` selects by **index label** (string/date/custom). `df.iloc[row_int, col_int]` selects by **integer position** (0-based, like list indexing). Use `loc` when your index has meaningful labels; `iloc` for positional slicing.
+4. `groupby("col")` splits the DataFrame into groups. `.agg({"salary": "mean", "age": "max"})` applies the specified aggregation function to each group. Returns a new DataFrame indexed by the group key. Example: `df.groupby("dept").agg({"salary": "mean"})` gives average salary per department.
+5. A left join keeps all rows from the left DataFrame. Matching rows from `other` are added; where there's no match, the columns from `other` are filled with `NaN`. The result always has the same number of rows as the left DataFrame (or more, if there are one-to-many matches).
+6. `dropna()` **removes** rows (or columns) that contain any `NaN`. `fillna(value)` **replaces** `NaN` with a specified value (scalar, forward-fill `method="ffill"`, or backward-fill). Use `dropna` when missing rows are unusable; `fillna` when you have a sensible imputation strategy.
+7. `df["col"].str.upper()` is a **vectorised Pandas string method** — executed in compiled code. `apply(lambda x: x.upper())` runs a Python-level loop, calling a lambda for every row. The `str` accessor is typically 3–10× faster and more readable.
+8. `pd.cut(df["age"], bins=[0,18,35,60,100], labels=["teen","young","mid","senior"])` bins a continuous numeric column into discrete categorical intervals. Use it for age groups, price tiers, score bands — any time you want to discretize a continuous variable for analysis or ML features.
+9. Use `pd.read_csv(path, chunksize=100_000)` which returns an iterator of DataFrames. Process each chunk independently and aggregate results. This keeps at most one chunk in RAM at a time instead of loading all 10M rows. Alternatively, use Parquet format with `pyarrow` for columnar reads.
+10. A 2D summary table with **regions as rows**, **years as columns**, and **sum of sales as cell values**. It's the Pandas equivalent of an Excel pivot table — useful for cross-tabulated reports and cohort analysis.

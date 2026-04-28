@@ -16,9 +16,31 @@ By the end of this module you will be able to:
 
 ---
 
-## 7.1 Why Virtual Environments?
+## The Big Picture — Dependency Management in Production
 
-### Conceptual Foundation
+The dependency management story in Python:
+
+```
+── Complexity grows over time ────────────────────────────────────────────
+
+Day 1:  pip install requests               Simple
+Day 30: pip install requests pydantic fastapi uvicorn redis celery  Growing
+Day 90: "It works on my machine but not CI"  ← the classic nightmare
+
+The problem: Python has ONE global site-packages by default.
+Every project can overwrite every other project's dependencies.
+
+The solution stack:
+  venv           → isolated per-project Python environment
+  requirements.txt → reproducible dep list (simple projects)
+  poetry.lock    → exact lockfile with ALL transitive deps
+  pyproject.toml → single source of truth for project config
+  pipx           → CLI tools in their own isolated envs
+```
+
+---
+
+## 7.1 Why Virtual Environments?
 
 By default, `pip install` places packages in the **system Python** installation — shared across every project on your machine. This causes:
 
@@ -37,6 +59,15 @@ System Python          Project A venv       Project B venv
 Python 3.11            Python 3.11          Python 3.11
 requests 2.31          requests 2.28        requests 2.31
 numpy 1.24             numpy 1.26           (no numpy)
+
+The venv is just a directory (.venv/) with:
+  .venv/bin/python   → symlink to system Python
+  .venv/bin/pip      → pip for this env only
+  .venv/lib/         → all packages installed here
+  .venv/pyvenv.cfg   → metadata (python version, etc.)
+
+Activating = prepending .venv/bin to PATH
+Deactivating = removing it from PATH
 ```
 
 ---
@@ -375,6 +406,25 @@ ruff check .
 
 ---
 
+## Interview Prep — Top Questions for Virtual Environments and Packages
+
+**Q1: What happens when you run `python -m venv .venv` and then activate it?**
+`python -m venv .venv` creates a directory with a Python interpreter symlink, a copy of `pip`, and an empty `site-packages`. Activating it prepends `.venv/bin` (or `.venv/Scripts` on Windows) to the `PATH`, so `python` and `pip` now resolve to the venv versions. All `pip install` commands install to the venv's `site-packages`, not the system Python.
+
+**Q2: What is the difference between `requirements.txt` and `poetry.lock`?**
+`requirements.txt` lists your direct dependencies with pinned versions. `poetry.lock` is a **complete lockfile** — it captures the exact resolved version of every package including all transitive dependencies (deps of deps). `poetry.lock` guarantees identical installs on every machine. Commit it to version control; never commit `.venv/`.
+
+**Q3: Why is the `src/` layout recommended for Python packages?**
+With a flat layout, `import mypackage` might resolve to the source directory instead of the installed package. This means tests can accidentally pass by importing uninstalled source. With `src/mypackage/`, the package is only importable after `pip install -e .`, ensuring you always test the installed version. It also prevents namespace collisions.
+
+**Q4: What does `pip install -e .` do?**
+Installs the package in **editable mode** — creates a link to your source directory instead of copying it. Changes to source files are immediately reflected without reinstalling. Essential for local development: you edit the code, run tests, and changes take effect instantly. Used with `pyproject.toml` or `setup.py` in the project root.
+
+**Q5: What is semantic versioning (semver) and why does it matter?**
+`MAJOR.MINOR.PATCH`: MAJOR = breaking change, MINOR = new backward-compatible feature, PATCH = bug fix. It matters because dependency resolvers use it: `>=2.1,<3.0` means "any 2.x that added the feature we need but hasn't broken our API". Violating semver (breaking API in a PATCH release) causes dependency hell for your users.
+
+---
+
 ## Module Summary
 
 | Tool | Purpose |
@@ -401,3 +451,15 @@ ruff check .
 8. What does `poetry export` do, and why is it useful for Docker?
 9. What does `__all__` in `__init__.py` control?
 10. What is semver, and how does it differ from a plain version number like "2024.1"?
+
+**Answers:**
+1. Because Python has a single global `site-packages` by default. Without isolation, installing Package A v1 for one project can break another project that requires Package A v2. Each project needs its own locked set of dependencies.
+2. `requirements.txt` lists the packages you explicitly want (with versions). `poetry.lock` captures the **complete resolved dependency graph** — every package and its exact version, including transitive dependencies of dependencies. `poetry.lock` guarantees identical installs across all environments.
+3. `~=2.28` is the "compatible release" specifier: `>=2.28, <3.0`. It allows patch and minor updates but not a new major version (which could break APIs).
+4. `src/` layout prevents accidentally running the uninstalled source code instead of the installed package. With `src/`, `import mypackage` only works after `pip install -e .`, ensuring you're always testing the installed version.
+5. `pip freeze` outputs all installed packages with their pinned versions. Use it to capture a working environment as `requirements.txt`. Limitation: includes dev tools and transitive deps — more verbose than ideal for production.
+6. `poetry add requests` adds to `[tool.poetry.dependencies]` (installed in production). `--group dev pytest` adds to `[tool.poetry.group.dev.dependencies]` (only for development, not shipped with the package).
+7. Always commit: `pyproject.toml` (project metadata), `poetry.lock` (exact dependency lockfile). Never commit: `.venv/` (the environment itself, which is reconstructable).
+8. `poetry export -f requirements.txt` converts `poetry.lock` to a standard `requirements.txt`. This is useful for Docker because it lets you do `pip install -r requirements.txt` without installing Poetry inside the container.
+9. `__all__` controls what is exported when someone writes `from mypackage import *`. It also tells IDEs and tools what the public API is. Symbols not in `__all__` are considered private.
+10. Semver encodes meaning in the version number: MAJOR.MINOR.PATCH. A bump in MAJOR signals breaking changes, MINOR signals new features, PATCH signals bug fixes. `2024.1` is calendar versioning — it tells you when it was released but nothing about compatibility.

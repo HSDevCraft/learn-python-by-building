@@ -597,6 +597,28 @@ for hash_val, files in dupes.items():
 
 ---
 
+## Interview Prep — Top Questions for Scripting and Automation
+
+**Q1: What is the difference between `argparse` and `click`?**
+Both build CLI applications. `argparse` is stdlib (no install needed), verbose but fully customizable. `click` (third-party) uses decorators (`@click.command`, `@click.option`), is more concise, has built-in help generation, and handles multi-command CLIs elegantly with `@click.group()`. Use `argparse` when you can't add dependencies; use `click` for complex CLIs.
+
+**Q2: How do you make a production-grade CLI script?**
+Key ingredients: `argparse`/`click` for argument parsing; `logging` (not `print`) for output; `sys.exit(0/1)` for proper exit codes; `--dry-run` flag for safety; `--verbose` flag for debugging; handle `KeyboardInterrupt` gracefully; never hardcode paths (use `Path` and env vars). Entry point defined in `pyproject.toml` `[project.scripts]`.
+
+**Q3: What is web scraping and what are the legal/ethical considerations?**
+Web scraping programmatically extracts data from web pages (HTML parsing with BeautifulSoup, browser automation with Playwright/Selenium). Legal considerations: check `robots.txt`, respect `Crawl-delay`, review Terms of Service. Ethical: don't overload servers (`time.sleep(1)`), identify your bot in User-Agent headers, don't scrape personal data without consent.
+
+**Q4: How do you schedule Python scripts in production?**
+- **Cron** (Unix): OS-level scheduling, runs even when Python process is dead, configured in `crontab -e`. Best for production.
+- **`schedule` library**: Python-level, runs inside a long-running process, simpler syntax. Good for prototyping.
+- **Celery Beat**: distributed task scheduler with a message broker. Use for complex workflows, retries, monitoring.
+- **Cloud schedulers**: AWS EventBridge, GCP Cloud Scheduler, GitHub Actions cron. Use when you're already on that platform.
+
+**Q5: What is the `--dry-run` pattern and why is it critical?**
+A `--dry-run` flag makes destructive operations (delete files, send emails, write to DB) print what they *would* do without actually doing it. Always implement this for scripts that modify state. Before running any automation in production, run with `--dry-run`, verify the output looks correct, then run for real. This is the single biggest safety net in automation.
+
+---
+
 ## Module Summary
 
 | Tool | Purpose |
@@ -624,3 +646,15 @@ for hash_val, files in dupes.items():
 8. Why should email credentials never be hardcoded in scripts?
 9. What is the purpose of the `--dry-run` pattern in automation scripts?
 10. What is the difference between cron scheduling and `schedule` (Python library)?
+
+**Answers:**
+1. `action="store_true"` sets the argument to `True` when the flag is present, `False` otherwise — no value required (`--verbose` alone works). `action="store"` requires the user to provide a value: `--verbose DEBUG`.
+2. Use `nargs="+"` for one or more values, or `nargs="*"` for zero or more. Example: `parser.add_argument("files", nargs="+")` → `python script.py a.txt b.txt c.txt` gives `args.files = ["a.txt", "b.txt", "c.txt"]`.
+3. `click.group()` creates a multi-command CLI (like `git`, `docker`). Each sub-command is defined with `@cli.command()`. Use it when your tool has distinct operations: `mytool process`, `mytool report`, `mytool clean`.
+4. To avoid overwhelming the target server (rate limiting, IP bans) and to be a polite crawler. Many sites block scrapers that send hundreds of requests per second. `time.sleep(1)` is a minimum; use `random.uniform(1, 3)` to appear more human-like.
+5. `shutil.copy()` copies file content and permissions but NOT timestamps. `shutil.copy2()` also preserves metadata (modification time, access time). Use `copy2` for backups where you want to preserve original timestamps.
+6. `os.environ.get("MY_VAR", "default_value")`. This returns `"default_value"` if `MY_VAR` is not set, instead of raising `KeyError`. For required variables, use `os.environ["MY_VAR"]` to fail fast with a clear error.
+7. It selects all HTML elements with tag `article` AND CSS class `product_pod` — i.e., `<article class="product_pod">`. This is CSS selector syntax: `tag.class`. Equivalent to `soup.find_all("article", class_="product_pod")`.
+8. Hardcoded credentials end up in version control (Git history), are visible to anyone with repo access, and can't be rotated without a code change. Use environment variables or a secrets manager (AWS Secrets Manager, HashiCorp Vault) and never commit `.env` files containing real credentials.
+9. `--dry-run` prints what the script *would* do without actually doing it. Essential for destructive operations (deleting files, sending emails, modifying databases). Lets you verify the script's logic safely before committing to the real action.
+10. Cron is an OS-level scheduler — runs even when your Python process is stopped, survives reboots, configured via `crontab`. The `schedule` library runs inside your Python process — simpler Python syntax, but stops when the process exits. Use cron for production jobs; `schedule` for quick automation scripts.

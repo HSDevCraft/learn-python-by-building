@@ -760,6 +760,51 @@ Create a GitHub Actions workflow for a Python project that:
 
 ---
 
+## Interview Prep — Top Questions for Production-Ready Code
+
+**Q1: What is the 12-Factor App methodology?**
+A set of best practices for cloud-native applications:
+1. One codebase, many deploys
+2. **Explicit dependencies** (`requirements.txt`/`pyproject.toml`)
+3. **Config in environment** (not code)
+4. **Backing services as attached resources** (DB, Redis via URL)
+5. Strict build/release/run separation
+6. **Stateless processes** (no local state)
+7. Port binding
+8. **Concurrency via process model**
+9. Fast startup and graceful shutdown
+10. Dev/prod parity
+11. **Logs as event streams** (structured JSON to stdout)
+12. Admin processes as one-off tasks
+Factors 3, 6, 11 are the most commonly tested in Python interviews.
+
+**Q2: What is Docker multi-stage build and why is it important?**
+Multi-stage builds use multiple `FROM` instructions. Stage 1 (builder): installs compilers, build tools, compiles wheels. Stage 2 (runtime): copies only the compiled artifacts — no build tools, no source cache. Result: production image can be 5–10× smaller. Smaller images = faster pulls, reduced attack surface, less disk cost. Always use multi-stage for production Python images.
+
+**Q3: How do you handle secrets securely in a Python application?**
+Never hardcode: not in source code, not in `Dockerfile`, not in `docker-compose.yml`. Use: environment variables (`.env` locally, injected by platform in prod), cloud secrets managers (AWS Secrets Manager, GCP Secret Manager, HashiCorp Vault), or Kubernetes Secrets. In Python: `pydantic-settings` reads env vars cleanly. `pip-audit` checks dependencies for known CVEs.
+
+**Q4: What is the difference between a linter and a formatter?**
+- **Formatter** (Black, `ruff format`): automatically rewrites code to a consistent style. Zero configuration needed; just run it.
+- **Linter** (Ruff, Flake8, Pylint): checks for code smells, unused imports, undefined names, anti-patterns. Reports issues but doesn't auto-fix everything.
+- **Type checker** (mypy, Pyright): verifies type annotation consistency. Catches bugs the linter misses.
+Use all three in CI. Run formatter first, then linter, then type checker.
+
+**Q5: What is mypy strict mode and what does it enforce?**
+`mypy --strict` enables: `--disallow-untyped-defs` (all functions must be annotated), `--disallow-any-generics` (no bare `list`, must be `list[int]`), `--warn-return-any`, `--no-implicit-optional`, `--strict-equality`. Strict mode catches: untyped function calls, missing return types, `Any` leakage. Start with default mode in existing codebases; gradually enable flags; require strict on new code.
+
+**Q6: What is a CI/CD pipeline and what should a Python project's look like?**
+CI (Continuous Integration) = automated quality checks on every PR. CD (Continuous Delivery/Deployment) = automated deployment on merge.
+Typical Python CI: checkout → setup Python matrix (3.10, 3.11, 3.12) → install deps → **ruff** (lint) → **ruff format --check** (style) → **mypy** (types) → **pytest --cov --cov-fail-under=80** (tests) → **pip-audit** (security) → **docker build** (artifact). Block merge if any step fails.
+
+**Q7: What is the difference between `COPY` and `ADD` in Dockerfile?**
+`COPY` simply copies files/directories from build context to the image — explicit, predictable. `ADD` can also: extract tar archives automatically, fetch from URLs. Never use `ADD` unless you specifically need tar extraction — `COPY` makes intent clear and is more secure (no network fetches inside the build).
+
+**Q8: How do you implement health checks in a production Python service?**
+Expose a `GET /health` endpoint that returns `{"status": "healthy"}` with HTTP 200. Health checks should: verify the service can respond, optionally check DB connectivity and critical dependencies. Load balancers and Kubernetes use health checks to route traffic (readiness) and restart stuck pods (liveness). Keep them fast (≤50ms) and don't include heavy operations.
+
+---
+
 ## Module Summary
 
 | Area | Tool/Practice |
@@ -788,3 +833,15 @@ Create a GitHub Actions workflow for a Python project that:
 8. What is the `jti` claim in a JWT and what does it enable?
 9. What does `@lru_cache(maxsize=1)` on `get_settings()` achieve?
 10. What is the difference between a linter and a type checker?
+
+**Answers:**
+1. With `src/` layout, your package lives in `src/mypackage/`. This prevents Python from accidentally importing the source directory directly when running tests — you must `pip install -e .` first, ensuring you always test the installed package, not the raw source. It also prevents namespace collisions and forces proper package structure.
+2. `pydantic-settings` reads environment variables that **match field names** (case-insensitive). If a `Settings` class has `database_url: str`, it looks for `DATABASE_URL` in the environment, then falls back to `.env` files, then the field default. This implements the 12-Factor App config principle cleanly.
+3. Default mypy mode only checks code that has type annotations — unannotated functions are silently ignored. `--strict` mode enables all strictness flags: `--disallow-untyped-defs`, `--no-implicit-optional`, `--warn-return-any`, etc. In strict mode, all functions must be annotated and `Any` must be explicit. Start with default, migrate to strict over time.
+4. If a container runs as root and an attacker exploits a vulnerability in the application, they gain root access to the container. While container isolation limits damage, root inside a container can escape certain sandboxes, mount host volumes, and escalate privileges. Non-root (UID 1001+) limits the blast radius significantly.
+5. Multi-stage builds use multiple `FROM` instructions. The first stage (builder) installs build tools, compiles, and installs dependencies. The final stage copies only the compiled artifacts — no build tools, compilers, or cached pip packages. Result: images can be 5–10× smaller, reducing attack surface and pull time.
+6. `pip-audit` queries the Python Packaging Advisory Database (PyPA) and checks your installed dependencies against **known CVEs (security vulnerabilities)**. It reports vulnerable packages with version ranges and available fixes. Essential in CI/CD pipelines to prevent shipping code with known security holes.
+7. `bcrypt` is a **slow** hashing algorithm by design — it includes a configurable work factor that increases computation time. This makes brute-force and dictionary attacks infeasible. `SHA-256` is extremely fast (nanoseconds per hash), making it trivial to try millions of passwords per second. Never use raw SHA-256 for passwords; use `bcrypt`, `argon2`, or `scrypt`.
+8. `jti` (JWT ID) is a unique identifier for a token. It enables **token revocation**: store issued `jti` values in a blocklist (Redis). On each request, check if the token's `jti` is in the blocklist. Without `jti`, JWTs can't be individually revoked before expiry — only key rotation invalidates all tokens at once.
+9. `@lru_cache(maxsize=1)` makes `get_settings()` return the **same `Settings` instance** on every call. The first call loads environment variables; all subsequent calls return the cached object instantly. This implements the singleton pattern for configuration — one load per process, no repeated env-var parsing.
+10. A **linter** (Black, Ruff, pylint) checks code style, syntax errors, unused imports, and anti-patterns — it catches issues that can be detected without running the code. A **type checker** (mypy, pyright) verifies that **type annotations are consistent** — catching type mismatches that a linter won't find. Both are complementary; use both in CI.

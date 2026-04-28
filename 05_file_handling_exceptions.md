@@ -7,347 +7,472 @@
 ## Learning Objectives
 
 By the end of this module you will be able to:
-- Read and write text and binary files using context managers
-- Work with CSV, JSON, and YAML file formats
-- Traverse directory trees using `pathlib`
-- Design and raise custom exceptions
-- Apply try/except/else/finally correctly
-- Use `contextlib` to build custom context managers
-- Handle real-world I/O errors gracefully
+- Explain how the OS, Python, and the `with` statement manage file descriptors
+- Read and write text and binary files safely using context managers
+- Work with CSV, JSON, and structured file formats using the standard library
+- Traverse directory trees using `pathlib` — the modern, cross-platform way
+- Design a custom exception hierarchy for a real application
+- Apply `try/except/else/finally` correctly — knowing when to use each block
+- Build custom context managers with `__enter__`/`__exit__` and `@contextmanager`
+- Implement system design patterns: config loading, audit logging, file-based event sourcing
+
+---
+
+## The Big Picture — Why Files and Exceptions Matter in System Design
+
+Every real system touches the filesystem:
+- **Config files** — load application settings at startup
+- **Log files** — record events for debugging and audit
+- **Data files** — read CSV/JSON exports, write reports
+- **Temp files** — buffer large computations, stage uploads
+
+And **every** production system must handle failures gracefully:
+- What if the config file is missing? → Custom exception, descriptive message
+- What if the network drops mid-write? → `finally` block, context manager cleanup
+- What if JSON is malformed? → Catch, chain, re-raise with context
+
+```
+File I/O mental model:
+  Your code  ──open()──►  OS file descriptor  ──►  Disk
+                              ▲
+                       open = acquire resource
+                       close = release resource
+                       
+  If you forget close():
+    - File descriptor leaked (limited resource, OS has ~1024 per process)
+    - Data may not be flushed to disk (write buffer not flushed)
+    - Other processes may be locked out
+    
+  The 'with' statement guarantees __exit__() is called,
+  which calls file.close(), even when an exception occurs.
+```
 
 ---
 
 ## 5.1 File I/O with Context Managers
 
-### Conceptual Foundation
-
-The `with` statement ensures that a file is **always closed**, even if an exception occurs. This is the only correct way to open files — never use bare `open()` without a context manager.
-
 ```python
 from pathlib import Path
 
-# WRONG — file may not be closed on exception
-f = open("data.txt")
-data = f.read()
-f.close()
+# ── WRONG: file may not close if an exception occurs ─────────────────────
+f = open("data.txt", "r")
+data = f.read()              # if this raises, f.close() is never called!
+f.close()                    # file descriptor leaked
 
-# CORRECT — guaranteed close via __exit__
+# ── CORRECT: 'with' guarantees __exit__() → file.close() always runs ─────
 with open("data.txt", "r", encoding="utf-8") as f:
-    data = f.read()
-```
+    data = f.read()          # even if this raises, file is closed
+# file is already closed here
 
-### Reading Files
+# ── File open modes ──────────────────────────────────────────────────────
+# "r"  — read text (default)
+# "w"  — write text (creates file, TRUNCATES existing content)
+# "a"  — append text (creates file if missing, adds to end)
+# "x"  — exclusive create (fails if file already exists — safe create)
+# "b"  — binary mode (combine: "rb", "wb")
+# "+"  — read and write: "r+" (must exist), "w+" (create/truncate)
 
-```python
-from pathlib import Path
-
+# ── Reading strategies — choose based on file size ───────────────────────
 path = Path("sample.txt")
 
-# Read entire file at once
-content = path.read_text(encoding="utf-8")
+# 1. Read entire file at once — simple, fine for small files (<50MB)
+content = path.read_text(encoding="utf-8")           # pathlib shorthand
 
-# Read line by line — memory efficient for large files
-with open(path, "r", encoding="utf-8") as f:
-    for line in f:                        # f is an iterator over lines
-        print(line.rstrip("\n"))
+# 2. Read line by line — O(1) memory, good for large files
+with open(path, encoding="utf-8") as f:
+    for line in f:                                   # f is a lazy iterator
+        processed = line.rstrip("\n")                # strip trailing newline
 
-# Read all lines into a list
-with open(path, "r", encoding="utf-8") as f:
-    lines = f.readlines()                 # includes newline characters
-    lines = [line.strip() for line in lines]
+# 3. Read all lines into a list — loads everything into RAM
+with open(path, encoding="utf-8") as f:
+    lines = [line.strip() for line in f]             # list comprehension
 
-# Read in chunks — for very large files
-def read_in_chunks(filepath: Path, chunk_size: int = 4096):
-    """Generator that yields file content in chunks."""
+# 4. Read in chunks — for very large binary files (videos, blobs)
+def read_chunks(filepath: Path, size: int = 65536):
+    """Generator yielding file content in chunks of `size` bytes."""
     with open(filepath, "rb") as f:
-        while chunk := f.read(chunk_size):
-            yield chunk
-```
+        while chunk := f.read(size):                 # walrus: assign and test
+            yield chunk                              # caller processes each chunk
 
-### Writing Files
+# ── Writing strategies ────────────────────────────────────────────────────
+output = Path("output.txt")
 
-```python
-from pathlib import Path
+# Overwrite: creates file if missing, truncates if existing
+with open(output, "w", encoding="utf-8") as f:
+    f.write("Line 1\n")
+    f.write("Line 2\n")
+    f.writelines(["Line 3\n", "Line 4\n"])           # write many at once
 
-path = Path("output.txt")
-
-# Write (overwrites existing content)
-with open(path, "w", encoding="utf-8") as f:
-    f.write("First line\n")
-    f.write("Second line\n")
-
-# Append (adds to existing content)
-with open(path, "a", encoding="utf-8") as f:
+# Append: add to end without touching existing content
+with open(output, "a", encoding="utf-8") as f:
     f.write("Appended line\n")
 
-# Write multiple lines at once
-lines = ["line 1\n", "line 2\n", "line 3\n"]
-with open(path, "w", encoding="utf-8") as f:
-    f.writelines(lines)
+# Atomic write pattern — prevents corrupt files on crash:
+# Write to a temp file, then rename (rename is atomic on most OS)
+import tempfile, shutil
 
-# Shorthand via pathlib
-path.write_text("Hello, file!\n", encoding="utf-8")
-content = path.read_text(encoding="utf-8")
+def atomic_write(path: Path, content: str) -> None:
+    """Write content atomically — reader never sees a partial file."""
+    tmp = path.with_suffix(".tmp")
+    try:
+        tmp.write_text(content, encoding="utf-8")
+        shutil.move(str(tmp), str(path))             # atomic on Unix; near-atomic on Windows
+    except Exception:
+        tmp.unlink(missing_ok=True)                  # clean up temp on failure
+        raise
 ```
 
 ---
 
-## 5.2 `pathlib` — Modern Path Handling
-
-`pathlib.Path` is the modern, object-oriented way to work with filesystem paths.
+## 5.2 `pathlib` — Modern Cross-Platform Path Handling
 
 ```python
 from pathlib import Path
-
-# Build paths — works on Windows AND Unix
-base = Path("projects") / "my_app" / "data"
-
-# Path inspection
-p = Path("/home/user/documents/report.pdf")
-print(p.name)         # report.pdf
-print(p.stem)         # report
-print(p.suffix)       # .pdf
-print(p.parent)       # /home/user/documents
-print(p.parts)        # ('/', 'home', 'user', 'documents', 'report.pdf')
-
-# Filesystem operations
-data_dir = Path("data")
-data_dir.mkdir(parents=True, exist_ok=True)   # create directory tree
-
-# Glob — find files matching a pattern
-project = Path(".")
-python_files = list(project.glob("**/*.py"))   # recursive
-md_files = list(project.glob("*.md"))          # current dir only
-
-# Check existence
-path = Path("config.json")
-if path.exists():
-    print(f"Size: {path.stat().st_size} bytes")
-    print(f"Modified: {path.stat().st_mtime}")
-
-# Iterate directory
-for entry in Path(".").iterdir():
-    if entry.is_file():
-        print(f"File: {entry.name}")
-    elif entry.is_dir():
-        print(f"Dir:  {entry.name}/")
-
-# Copy, move, rename
 import shutil
-shutil.copy("source.txt", "destination.txt")
-shutil.move("old_name.txt", "new_name.txt")
-Path("temp.txt").unlink(missing_ok=True)       # delete file safely
+
+# ── Why pathlib over os.path? ─────────────────────────────────────────────
+# os.path.join("data", "file.txt")  → string concatenation, error-prone
+# Path("data") / "file.txt"         → object with methods, cross-platform
+
+# ── Building paths ────────────────────────────────────────────────────────
+base = Path("projects") / "my_app" / "data"     # / operator joins paths
+home = Path.home()                               # /home/username or C:/Users/username
+cwd  = Path.cwd()                                # current working directory
+
+# ── Path inspection — all are properties, no () needed ───────────────────
+p = Path("/home/alice/documents/report.pdf")
+print(p.name)           # 'report.pdf'         — filename with extension
+print(p.stem)           # 'report'             — filename without extension
+print(p.suffix)         # '.pdf'               — extension including dot
+print(p.suffixes)       # ['.pdf']             — all extensions (for .tar.gz → ['.tar','.gz'])
+print(p.parent)         # /home/alice/documents
+print(p.parents[1])     # /home/alice          — grandparent
+print(p.parts)          # ('/', 'home', 'alice', 'documents', 'report.pdf')
+print(p.is_absolute())  # True
+
+# ── Creating and removing ─────────────────────────────────────────────────
+data_dir = Path("data/raw/2024")
+data_dir.mkdir(parents=True, exist_ok=True)     # create full tree safely
+
+p = Path("temp/file.txt")
+p.parent.mkdir(parents=True, exist_ok=True)     # ensure parent exists first
+p.write_text("content", encoding="utf-8")
+
+p.unlink(missing_ok=True)                       # delete file (no error if gone)
+shutil.rmtree("temp", ignore_errors=True)       # delete directory tree
+
+# ── Inspection ────────────────────────────────────────────────────────────
+config = Path("config.json")
+print(config.exists())                          # True/False
+print(config.is_file())                         # True if it's a regular file
+print(config.is_dir())                          # True if it's a directory
+
+stat = config.stat()
+print(f"Size: {stat.st_size:,} bytes")
+print(f"Modified: {stat.st_mtime}")
+
+# ── Iterating and globbing ────────────────────────────────────────────────
+project = Path(".")
+
+# Direct children:
+for entry in project.iterdir():
+    kind = "dir" if entry.is_dir() else "file"
+    print(f"{kind}: {entry.name}")
+
+# Glob — find by pattern:
+python_files = list(project.glob("**/*.py"))    # ** = recursive
+json_files   = list(project.glob("*.json"))     # *.json in current dir only
+
+# rglob — recursive glob shorthand:
+all_md = list(project.rglob("*.md"))            # same as glob("**/*.md")
+
+# ── Renaming, copying, moving ─────────────────────────────────────────────
+Path("old.txt").rename("new.txt")               # rename in same directory
+shutil.copy2("source.txt", "backup.txt")        # copy with metadata preserved
+shutil.move("file.txt", "archive/file.txt")     # move (rename across dirs)
+
+# ── Path manipulation ─────────────────────────────────────────────────────
+p = Path("reports/2024/q1.csv")
+print(p.with_name("q2.csv"))        # reports/2024/q2.csv
+print(p.with_suffix(".json"))       # reports/2024/q1.json
+print(p.relative_to("reports"))    # 2024/q1.csv
+print(p.resolve())                  # absolute path, resolves symlinks
 ```
 
 ---
 
 ## 5.3 Structured File Formats
 
-### CSV
+### CSV — Tabular Data
 
 ```python
 import csv
 from pathlib import Path
 
-# Writing CSV
+# ── Writing CSV with DictWriter ───────────────────────────────────────────
 employees = [
     {"name": "Alice", "department": "Engineering", "salary": 95000},
     {"name": "Bob",   "department": "Marketing",   "salary": 72000},
     {"name": "Carol", "department": "Engineering", "salary": 105000},
 ]
 
+# ALWAYS use newline="" when opening CSV files to prevent blank rows on Windows
 with open("employees.csv", "w", newline="", encoding="utf-8") as f:
-    fieldnames = ["name", "department", "salary"]
-    writer = csv.DictWriter(f, fieldnames=fieldnames)
-    writer.writeheader()
-    writer.writerows(employees)
+    writer = csv.DictWriter(f, fieldnames=["name", "department", "salary"])
+    writer.writeheader()                # writes the header row
+    writer.writerows(employees)         # writes all rows at once
 
-# Reading CSV
+# ── Reading CSV with DictReader ───────────────────────────────────────────
 with open("employees.csv", "r", newline="", encoding="utf-8") as f:
-    reader = csv.DictReader(f)
+    reader = csv.DictReader(f)          # first row becomes field names
     for row in reader:
+        # NOTE: all values from CSV are strings — convert as needed
         print(f"{row['name']}: ${int(row['salary']):,}")
+
+# ── Memory-efficient streaming for large CSVs ─────────────────────────────
+def stream_csv(path: Path):
+    """Yield rows one at a time without loading entire file."""
+    with open(path, newline="", encoding="utf-8") as f:
+        yield from csv.DictReader(f)    # generator — only reads one row at a time
 ```
 
-### JSON
+### JSON — Structured Data
 
 ```python
 import json
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, date
+from typing import Any
 
-# Python object → JSON string
+# ── Basic read/write ──────────────────────────────────────────────────────
 data = {
     "users": [
         {"id": 1, "name": "Alice", "active": True},
         {"id": 2, "name": "Bob",   "active": False},
     ],
-    "generated_at": "2024-01-15",
     "count": 2,
 }
 
-# Write to file
+# Write (indent=2 makes it human-readable)
 with open("data.json", "w", encoding="utf-8") as f:
-    json.dump(data, f, indent=2)
+    json.dump(data, f, indent=2, ensure_ascii=False)   # ensure_ascii=False preserves Unicode
 
-# Read from file
+# Read
 with open("data.json", "r", encoding="utf-8") as f:
     loaded = json.load(f)
 
-# String conversion (for API responses, etc.)
-json_str = json.dumps(data, indent=2)
-parsed = json.loads(json_str)
+# String conversion — for API payloads, Redis values, etc.
+payload = json.dumps(data, indent=2)
+parsed  = json.loads(payload)
 
-# Custom JSON serialization
-class DateTimeEncoder(json.JSONEncoder):
-    """JSON encoder that handles datetime objects."""
-    def default(self, obj):
-        if isinstance(obj, datetime):
-            return obj.isoformat()
-        return super().default(obj)
+# ── Custom encoder: handle types json doesn't know ────────────────────────
+class AppJSONEncoder(json.JSONEncoder):
+    """Extends JSON encoder to handle datetime, date, set, Path."""
+    def default(self, obj: Any) -> Any:
+        if isinstance(obj, (datetime, date)):
+            return obj.isoformat()          # "2024-01-15T10:30:00"
+        if isinstance(obj, set):
+            return sorted(list(obj))        # set → sorted list (deterministic)
+        if isinstance(obj, Path):
+            return str(obj)                 # Path → string
+        return super().default(obj)         # raises TypeError for unknown types
 
-event = {"name": "Launch", "timestamp": datetime.now()}
-print(json.dumps(event, cls=DateTimeEncoder))
+event = {
+    "name": "Deploy",
+    "timestamp": datetime.now(),
+    "tags": {"python", "production"},
+    "path": Path("logs/deploy.log"),
+}
+print(json.dumps(event, cls=AppJSONEncoder, indent=2))
+
+# ── Pathlib shorthand ─────────────────────────────────────────────────────
+path = Path("config.json")
+path.write_text(json.dumps({"debug": True}, indent=2), encoding="utf-8")
+config = json.loads(path.read_text(encoding="utf-8"))
 ```
 
 ---
 
-## 5.4 Exception Handling
+## 5.4 Exception Handling — The Full Picture
 
-### Conceptual Foundation
-
-Exceptions are Python's mechanism for signalling that something unexpected happened. The `try/except` block lets you handle those situations gracefully rather than crashing.
+### How Python Exceptions Work
 
 ```
-try:
-    ← normal execution path
-except SomeError:
-    ← error handling path
-else:
-    ← runs ONLY if no exception was raised
-finally:
-    ← ALWAYS runs (cleanup)
+try block raises ExceptionType
+       │
+       ▼
+Python walks the CALL STACK upward, looking for:
+  1. A matching except ExceptionType clause
+  2. If found → execute that except block
+  3. If not found → unwind the stack, print traceback, exit
+
+Key blocks:
+  try:     → normal code path
+  except:  → error handling (runs INSTEAD of the rest of try)
+  else:    → success path (runs ONLY if NO exception was raised in try)
+  finally: → cleanup (runs ALWAYS — whether or not an exception occurred)
 ```
 
 ```python
-def safe_divide(a: float, b: float) -> float | None:
-    """Divide a by b with comprehensive error handling."""
+def process_file(path: str) -> dict:
+    """Demonstrates all four try/except/else/finally blocks."""
+    f = None
     try:
-        result = a / b
-    except ZeroDivisionError:
-        print("Error: Division by zero.")
-        return None
-    except TypeError as e:
-        print(f"Error: Invalid types — {e}")
-        return None
+        f = open(path, encoding="utf-8")          # might raise FileNotFoundError
+        data = json.loads(f.read())               # might raise JSONDecodeError
+        result = transform(data)                  # might raise anything
+    except FileNotFoundError:
+        print(f"File not found: {path}")
+        return {}                                 # safe default
+    except json.JSONDecodeError as e:
+        print(f"Invalid JSON in {path}: {e}")
+        return {}
     else:
-        print(f"Success: {a} / {b} = {result}")
+        # This block ONLY runs if NO exception occurred in try
+        print(f"Successfully processed {path}")
         return result
     finally:
-        print("Division attempt complete.")   # always runs
-
-safe_divide(10, 2)    # Success, then "complete"
-safe_divide(10, 0)    # ZeroDivision error, then "complete"
-safe_divide("a", 2)   # TypeError, then "complete"
+        # ALWAYS runs — perfect for cleanup
+        if f and not f.closed:
+            f.close()
+        print("Processing attempt complete")       # logs every attempt
 ```
 
-### Exception Hierarchy
+### Python Exception Hierarchy
 
 ```
-BaseException
- ├── SystemExit
- ├── KeyboardInterrupt
- └── Exception
-      ├── ValueError
-      ├── TypeError
-      ├── KeyError
-      ├── IndexError
-      ├── AttributeError
-      ├── FileNotFoundError (→ OSError → IOError)
-      ├── PermissionError (→ OSError)
-      ├── RuntimeError
-      └── StopIteration
+BaseException                    ← don't catch this directly
+ ├── SystemExit                  ← sys.exit() — don't catch
+ ├── KeyboardInterrupt           ← Ctrl+C — don't catch (usually)
+ └── Exception                  ← catch this as a last resort
+      ├── ValueError             ← bad value (int("abc"))
+      ├── TypeError              ← wrong type (1 + "a")
+      ├── AttributeError         ← missing attribute (None.split())
+      ├── KeyError               ← missing dict key (d["x"])
+      ├── IndexError             ← list index out of range
+      ├── NameError              ← undefined variable
+      ├── RuntimeError           ← generic runtime issue
+      ├── NotImplementedError    ← abstract method not overridden
+      ├── StopIteration          ← iterator exhausted
+      └── OSError                ← I/O and system calls
+           ├── FileNotFoundError  ← file/dir doesn't exist
+           ├── PermissionError    ← access denied
+           ├── IsADirectoryError  ← expected file, got directory
+           └── ConnectionError    ← network issues
 ```
 
 ```python
-# Catch multiple exception types
-try:
-    value = int(input("Enter a number: "))
-    result = 100 / value
-except (ValueError, ZeroDivisionError) as e:
-    print(f"Invalid input: {e}")
+# ── Catching the right things ─────────────────────────────────────────────
 
-# Catch all exceptions (use sparingly — only at top level)
+# Catch one specific exception:
 try:
-    risky_operation()
+    value = int("abc")
+except ValueError as e:
+    print(f"Conversion failed: {e}")
+
+# Catch multiple specific exceptions (same handler):
+try:
+    result = data["key"] + 1
+except (KeyError, TypeError) as e:
+    print(f"Data problem: {type(e).__name__}: {e}")
+
+# Catch with different handlers per type:
+try:
+    result = risky_call()
+except ValueError as e:
+    handle_validation(e)
+except OSError as e:
+    handle_io(e)
 except Exception as e:
-    log.error(f"Unexpected error: {e}", exc_info=True)
-    raise   # re-raise after logging — don't swallow exceptions!
+    logger.error("Unexpected error", exc_info=True)
+    raise           # always re-raise unexpected exceptions!
 
-# Never do this — silences ALL exceptions including bugs
+# ── Re-raising ────────────────────────────────────────────────────────────
+try:
+    do_work()
+except Exception as e:
+    logger.error(f"Work failed: {e}")
+    raise           # re-raise the SAME exception with original traceback
+
+# ── Exception chaining — preserve the original cause ─────────────────────
+import json
+from pathlib import Path
+
+def load_config(path: str) -> dict:
+    try:
+        return json.loads(Path(path).read_text())
+    except FileNotFoundError as e:
+        raise RuntimeError(f"Config missing: {path}") from e    # chain!
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Config corrupted: {path}") from e    # chain!
+    # Callers see RuntimeError/ValueError but __cause__ holds the original
+
+# ── NEVER do these ────────────────────────────────────────────────────────
 try:
     something()
-except:         # bare except catches even SystemExit, KeyboardInterrupt
-    pass        # BUG: errors vanish silently
+except:             # BAD: bare except catches KeyboardInterrupt, SystemExit
+    pass            # BAD: silences ALL exceptions — bugs become invisible
 ```
 
-### Custom Exceptions
+### Custom Exception Hierarchies
 
 ```python
+from __future__ import annotations
+from dataclasses import dataclass
+from http import HTTPStatus
+
+# ── Define a hierarchy for your application ───────────────────────────────
 class AppError(Exception):
-    """Base exception for all application errors."""
+    """Root exception for all application errors. Always catch at the boundary."""
 
-class ValidationError(AppError):
-    """Raised when input data fails validation."""
-    def __init__(self, field: str, message: str) -> None:
-        self.field = field
-        self.message = message
-        super().__init__(f"Validation error on '{field}': {message}")
+class ConfigError(AppError):
+    """Configuration loading or validation failed."""
 
-class DatabaseError(AppError):
-    """Raised when a database operation fails."""
-    def __init__(self, operation: str, detail: str) -> None:
-        self.operation = operation
-        super().__init__(f"Database {operation} failed: {detail}")
+class StorageError(AppError):
+    """Database or file system operation failed."""
 
 class NotFoundError(AppError):
-    """Raised when a requested resource does not exist."""
-    def __init__(self, resource: str, identifier) -> None:
-        super().__init__(f"{resource} with id={identifier!r} not found")
+    """Requested resource does not exist."""
+    def __init__(self, resource: str, identifier: object) -> None:
+        self.resource = resource
+        self.identifier = identifier
+        super().__init__(f"{resource} '{identifier}' not found")
 
+class ValidationError(AppError):
+    """Input data failed validation."""
+    def __init__(self, field: str, value: object, reason: str) -> None:
+        self.field = field
+        self.value = value
+        self.reason = reason
+        super().__init__(f"Validation failed for '{field}={value!r}': {reason}")
 
-# Usage
+class AuthError(AppError):
+    """Authentication or authorization failed."""
+    def __init__(self, message: str, status: HTTPStatus = HTTPStatus.UNAUTHORIZED) -> None:
+        self.status = status
+        super().__init__(message)
+
+# ── Usage: callers can catch at any level of specificity ─────────────────
 def get_user(user_id: int) -> dict:
     if not isinstance(user_id, int) or user_id <= 0:
-        raise ValidationError("user_id", "Must be a positive integer")
+        raise ValidationError("user_id", user_id, "must be a positive integer")
 
-    users = {1: {"name": "Alice"}, 2: {"name": "Bob"}}
-    if user_id not in users:
+    db = {1: {"name": "Alice", "role": "admin"}, 2: {"name": "Bob", "role": "user"}}
+
+    if user_id not in db:
         raise NotFoundError("User", user_id)
 
-    return users[user_id]
+    return db[user_id]
 
+# Caller can be specific or general:
 try:
     user = get_user(99)
 except NotFoundError as e:
-    print(e)          # User with id=99 not found
+    print(f"404: {e}")                  # handles specifically
 except ValidationError as e:
-    print(f"Bad input: {e.field} — {e.message}")
-```
-
-### Exception Chaining
-
-```python
-def parse_config(path: str) -> dict:
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except FileNotFoundError as e:
-        raise RuntimeError(f"Config file not found: {path}") from e
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in config: {path}") from e
-
-# The original exception is preserved as __cause__
+    print(f"400: {e.field} → {e.reason}")
+except AppError as e:
+    print(f"Application error: {e}")    # catches any app error
 ```
 
 ---
@@ -357,301 +482,392 @@ def parse_config(path: str) -> dict:
 ```python
 import contextlib
 import time
+from pathlib import Path
+from typing import Generator
 
-# Method 1: Class with __enter__ and __exit__
+# ── Method 1: Class with __enter__ and __exit__ ───────────────────────────
 class Timer:
-    """Context manager that measures elapsed time."""
+    """Measure elapsed time for any code block."""
 
-    def __enter__(self):
-        self.start = time.perf_counter()
-        return self              # value assigned to 'as' variable
+    def __enter__(self) -> "Timer":
+        self._start = time.perf_counter()
+        return self                             # 'as t' gets this object
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.elapsed = time.perf_counter() - self.start
-        print(f"Elapsed: {self.elapsed:.4f}s")
-        return False             # False = don't suppress exceptions
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        self.elapsed = time.perf_counter() - self._start
+        # exc_type is None if no exception, or the exception class if one occurred
+        if exc_type:
+            print(f"Failed after {self.elapsed:.4f}s: {exc_val}")
+        else:
+            print(f"Completed in {self.elapsed:.4f}s")
+        return False    # False = DO NOT suppress exceptions (they propagate normally)
+                        # True  = suppress the exception (rarely correct)
 
 with Timer() as t:
-    total = sum(range(1_000_000))
-print(f"Result: {total}, Time: {t.elapsed:.4f}s")
+    total = sum(i**2 for i in range(1_000_000))
+print(f"Sum: {total}, took {t.elapsed:.4f}s")
 
-# Method 2: @contextlib.contextmanager (simpler)
+# ── Method 2: @contextmanager — simpler generator-based approach ──────────
+# yield once: everything BEFORE yield is __enter__, AFTER yield is __exit__
+
 @contextlib.contextmanager
-def managed_temp_file(suffix: str = ".tmp"):
-    """Create a temp file, yield its path, delete it afterward."""
-    import tempfile, os
-    fd, path = tempfile.mkstemp(suffix=suffix)
+def temp_directory() -> Generator[Path, None, None]:
+    """Create a temporary directory, clean it up when done."""
+    import tempfile, shutil
+    tmp = Path(tempfile.mkdtemp())
     try:
-        os.close(fd)
-        yield Path(path)
+        yield tmp               # caller works with the temp dir here
     finally:
-        Path(path).unlink(missing_ok=True)
-        print(f"Cleaned up {path}")
+        shutil.rmtree(tmp, ignore_errors=True)   # always clean up
 
-with managed_temp_file(".txt") as tmp:
-    tmp.write_text("temporary data")
-    print(f"Working with {tmp}")
-# File deleted after block
+with temp_directory() as tmp:
+    (tmp / "data.txt").write_text("hello", encoding="utf-8")
+    files = list(tmp.iterdir())
+    print(f"Temp files: {files}")
+# temp dir is deleted here
+
+@contextlib.contextmanager
+def database_transaction(db):
+    """Wrap DB calls in a transaction — commit on success, rollback on error."""
+    try:
+        yield db
+        db.commit()             # runs if no exception
+    except Exception:
+        db.rollback()           # runs if any exception
+        raise                   # re-raise so caller knows it failed
+
+# ── System Design: Distributed Lock via a file ────────────────────────────
+@contextlib.contextmanager
+def file_lock(lock_path: Path, timeout: float = 5.0) -> Generator[None, None, None]:
+    """
+    Simple file-based mutex — prevents two processes running the same task.
+    Used in: cron job deduplication, multi-worker task queues.
+    """
+    import time
+    start = time.monotonic()
+    while True:
+        try:
+            fd = lock_path.open("x")    # "x" mode: exclusive create — fails if exists
+            break
+        except FileExistsError:
+            if time.monotonic() - start > timeout:
+                raise TimeoutError(f"Could not acquire lock: {lock_path}")
+            time.sleep(0.1)             # wait and retry
+    try:
+        yield
+    finally:
+        fd.close()
+        lock_path.unlink(missing_ok=True)   # release lock
+
+with file_lock(Path("/tmp/my_job.lock")):
+    print("Running exclusive task...")
+```
+
+---
+
+## 5.6 System Design — Patterns Using File I/O
+
+### Append-Only Audit Log (Event Sourcing)
+
+```python
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from contextlib import contextmanager
+
+class AuditLog:
+    """
+    Append-only audit log stored as newline-delimited JSON (NDJSON).
+    Each line is an independent JSON object — robust to partial writes.
+
+    Used in: financial systems, security auditing, event sourcing.
+    NDJSON allows streaming reads without loading the entire file.
+    """
+
+    def __init__(self, log_path: Path) -> None:
+        self._path = log_path
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+
+    def record(self, event_type: str, actor: str, **details) -> None:
+        """Append one audit event. Thread-safe for single-process use."""
+        entry = {
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            "event":     event_type,
+            "actor":     actor,
+            **details,
+        }
+        # "a" mode + one json.dumps per line = append-only, crash-safe
+        with open(self._path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")   # one JSON object per line
+
+    def read_events(self, event_type: str | None = None):
+        """Stream events from the log, optionally filtered by type."""
+        if not self._path.exists():
+            return
+        with open(self._path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                event = json.loads(line)
+                if event_type is None or event["event"] == event_type:
+                    yield event
+
+audit = AuditLog(Path("logs/audit.ndjson"))
+audit.record("user_login",    actor="alice",  ip="192.168.1.1")
+audit.record("config_change", actor="admin",  key="timeout", old=30, new=60)
+audit.record("user_login",    actor="bob",    ip="10.0.0.5")
+
+print("All logins:")
+for event in audit.read_events("user_login"):
+    print(f"  {event['actor']} from {event['ip']} at {event['timestamp']}")
 ```
 
 ---
 
 ## Best Practices
 
-1. **Always use `with` for file operations** — guarantees proper resource cleanup.
-2. **Use `pathlib.Path` over `os.path`** — more readable and cross-platform.
-3. **Catch specific exceptions** — never use bare `except:`.
-4. **Create custom exception hierarchies** — gives callers fine-grained control.
-5. **Use exception chaining (`raise X from Y`)** — preserves the original cause.
-6. **Don't swallow exceptions** — at minimum, log them and re-raise.
-7. **Use `else` in try/except** — run success code only when no exception occurred.
-8. **Use `finally` for cleanup** — not for error handling logic.
-9. **Always specify encoding** — `open(..., encoding="utf-8")` to avoid platform issues.
+```python
+# 1. Always use 'with' — never bare open()
+with open("file.txt", encoding="utf-8") as f:
+    data = f.read()
+
+# 2. Always specify encoding explicitly
+with open("file.txt", encoding="utf-8") as f: ...   # not relying on platform default
+
+# 3. Use pathlib.Path for all path operations
+from pathlib import Path
+path = Path("data") / "file.txt"     # not os.path.join("data", "file.txt")
+
+# 4. Catch specific exceptions, never bare except
+try: ...
+except FileNotFoundError: ...        # specific
+# NOT: except:  or  except Exception as e: pass
+
+# 5. Always chain exceptions to preserve cause
+try: ...
+except json.JSONDecodeError as e:
+    raise ConfigError("Bad JSON") from e    # not: raise ConfigError("Bad JSON")
+
+# 6. Design custom exception hierarchies
+class AppError(Exception): ...
+class NotFoundError(AppError): ...
+
+# 7. Use atomic writes for critical files
+tmp = path.with_suffix(".tmp")
+tmp.write_text(content)
+shutil.move(str(tmp), str(path))     # atomic rename
+```
 
 ---
 
 ## Exercises
 
-### Exercise 5.1 — Log File Analyser (Intermediate)
-Write a function that reads a log file and returns counts of each log level (INFO, WARNING, ERROR).
+### Exercise 5.1 — Log File Analyser
 
-**Solution:**
 ```python
 from collections import Counter
 from pathlib import Path
+import re
 
 def analyse_log(filepath: str | Path) -> dict[str, int]:
     """
-    Parse a log file and count occurrences of each log level.
-
-    Expected log format: "2024-01-15 10:30:00 - INFO - Message"
+    Parse log file and count occurrences of each log level.
+    Log format: "2024-01-15 10:30:00 INFO message..."
     """
     levels = Counter()
-    filepath = Path(filepath)
+    level_pattern = re.compile(r"\b(DEBUG|INFO|WARNING|ERROR|CRITICAL)\b")
 
-    try:
-        with open(filepath, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                parts = line.split(" - ")
-                if len(parts) >= 2:
-                    level = parts[1].strip()
-                    levels[level] += 1
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Log file not found: {filepath}")
-    except PermissionError:
-        raise PermissionError(f"Cannot read log file: {filepath}")
+    with open(filepath, encoding="utf-8") as f:
+        for line in f:
+            match = level_pattern.search(line)
+            if match:
+                levels[match.group(1)] += 1
 
     return dict(levels)
 ```
 
----
+### Exercise 5.2 — Config Loader with Validation
 
-### Exercise 5.2 — Safe JSON Config Loader (Intermediate)
-Write `load_config(path, defaults)` that loads a JSON config file, merges it with defaults, and validates required keys. Raise descriptive custom exceptions on failure.
-
-**Solution:**
 ```python
 import json
 from pathlib import Path
 
-class ConfigError(Exception):
-    """Raised when configuration loading or validation fails."""
+class ConfigError(Exception): ...
 
 def load_config(path: str | Path, defaults: dict | None = None,
-                required_keys: list[str] | None = None) -> dict:
-    """
-    Load and validate a JSON config file.
-
-    Args:
-        path: Path to the JSON config file.
-        defaults: Default values merged before the file values.
-        required_keys: Keys that must be present in the final config.
-
-    Returns:
-        Merged configuration dictionary.
-
-    Raises:
-        ConfigError: If file is missing, invalid JSON, or keys are absent.
-    """
-    path = Path(path)
+                required: list[str] | None = None) -> dict:
+    """Load JSON config, merge with defaults, validate required keys."""
     config = dict(defaults or {})
-
     try:
-        with open(path, encoding="utf-8") as f:
-            file_config = json.load(f)
+        config.update(json.loads(Path(path).read_text(encoding="utf-8")))
     except FileNotFoundError:
-        raise ConfigError(f"Config file not found: {path}")
+        raise ConfigError(f"Config not found: {path}")
     except json.JSONDecodeError as e:
-        raise ConfigError(f"Invalid JSON in {path}: {e}") from e
+        raise ConfigError(f"Invalid JSON in {path}") from e
 
-    config.update(file_config)
-
-    if required_keys:
-        missing = [k for k in required_keys if k not in config]
-        if missing:
-            raise ConfigError(f"Missing required config keys: {missing}")
+    if missing := [k for k in (required or []) if k not in config]:
+        raise ConfigError(f"Missing required keys: {missing}")
 
     return config
 ```
 
----
+### Exercise 5.3 — CSV Sales Report
 
-### Exercise 5.3 — CSV Report Generator (Advanced)
-Read a CSV of sales data (date, product, quantity, price), calculate totals per product, and write a summary report CSV.
-
-**Solution:**
 ```python
 import csv
 from pathlib import Path
 from collections import defaultdict
 
-def generate_sales_report(input_path: str | Path, output_path: str | Path) -> dict:
-    """
-    Read sales CSV and write a summary report grouped by product.
+def sales_report(input_csv: Path, output_csv: Path) -> dict:
+    """Aggregate sales by product and write summary CSV."""
+    totals = defaultdict(lambda: {"units": 0, "revenue": 0.0})
 
-    Input columns: date, product, quantity, price
-    Output columns: product, units_sold, total_revenue
-    """
-    totals: dict[str, dict] = defaultdict(lambda: {"units_sold": 0, "total_revenue": 0.0})
-    input_path = Path(input_path)
+    with open(input_csv, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            p = row["product"]
+            totals[p]["units"]   += int(row["quantity"])
+            totals[p]["revenue"] += int(row["quantity"]) * float(row["price"])
 
-    with open(input_path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            product = row["product"]
-            quantity = int(row["quantity"])
-            price = float(row["price"])
-            totals[product]["units_sold"] += quantity
-            totals[product]["total_revenue"] += quantity * price
-
-    with open(output_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["product", "units_sold", "total_revenue"])
-        writer.writeheader()
+    with open(output_csv, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["product", "units", "revenue"])
+        w.writeheader()
         for product, data in sorted(totals.items()):
-            writer.writerow({
-                "product": product,
-                "units_sold": data["units_sold"],
-                "total_revenue": round(data["total_revenue"], 2),
-            })
-
+            w.writerow({"product": product, "units": data["units"],
+                        "revenue": round(data["revenue"], 2)})
     return dict(totals)
 ```
 
 ---
 
-## Mini-Project — Personal Expense Tracker (CLI)
+## Mini-Project — JSON-Backed Expense Tracker
 
 ```python
-import json
-import csv
+import json, csv
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
 
-DATA_FILE = Path("expenses.json")
-
 class ExpenseTracker:
-    """File-backed expense tracker with JSON persistence."""
+    """File-backed expense tracker with JSON persistence and CSV export."""
 
-    def __init__(self, data_file: Path = DATA_FILE) -> None:
-        self._file = data_file
-        self._expenses: list[dict] = self._load()
+    def __init__(self, path: Path = Path("expenses.json")) -> None:
+        self._path = path
+        self._data: list[dict] = self._load()
 
     def _load(self) -> list[dict]:
-        if not self._file.exists():
+        if not self._path.exists():
             return []
         try:
-            return json.loads(self._file.read_text(encoding="utf-8"))
+            return json.loads(self._path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            print(f"Warning: Corrupt data file, starting fresh.")
+            print("Warning: corrupt data file — starting fresh")
             return []
 
     def _save(self) -> None:
-        self._file.write_text(
-            json.dumps(self._expenses, indent=2),
-            encoding="utf-8"
-        )
+        self._path.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
 
-    def add(self, amount: float, category: str, description: str = "") -> None:
-        """Record a new expense."""
+    def add(self, amount: float, category: str, note: str = "") -> None:
         if amount <= 0:
             raise ValueError("Amount must be positive")
-        self._expenses.append({
-            "date": datetime.now().isoformat(timespec="seconds"),
-            "amount": round(amount, 2),
-            "category": category.strip().lower(),
-            "description": description.strip(),
-        })
+        self._data.append({"date": datetime.now().isoformat("T", "seconds"),
+                            "amount": round(amount, 2),
+                            "category": category.lower().strip(),
+                            "note": note.strip()})
         self._save()
 
     def summary(self) -> dict[str, float]:
-        """Return total spending per category."""
         totals: dict[str, float] = defaultdict(float)
-        for exp in self._expenses:
-            totals[exp["category"]] += exp["amount"]
+        for e in self._data:
+            totals[e["category"]] += e["amount"]
         return dict(totals)
 
-    def export_csv(self, path: str | Path) -> None:
-        """Export all expenses to a CSV file."""
+    def export_csv(self, path: Path) -> None:
         with open(path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=["date", "amount", "category", "description"])
-            writer.writeheader()
-            writer.writerows(self._expenses)
-        print(f"Exported {len(self._expenses)} expenses to {path}")
+            w = csv.DictWriter(f, fieldnames=["date","amount","category","note"])
+            w.writeheader(); w.writerows(self._data)
 
     def report(self) -> None:
-        """Print formatted spending report."""
-        if not self._expenses:
-            print("No expenses recorded.")
-            return
-        total = sum(e["amount"] for e in self._expenses)
-        print(f"\n{'EXPENSE REPORT':=^40}")
-        for cat, amount in sorted(self.summary().items(), key=lambda x: -x[1]):
-            bar = "█" * int(amount / total * 20)
-            print(f"{cat:<15} ${amount:>8.2f} {bar}")
+        if not self._data:
+            print("No expenses recorded."); return
+        total = sum(e["amount"] for e in self._data)
+        print(f"\n{'EXPENSES':=^40}")
+        for cat, amt in sorted(self.summary().items(), key=lambda x: -x[1]):
+            bar = "█" * int(amt / total * 20)
+            print(f"{cat:<15} ${amt:>8.2f}  {bar}")
         print(f"{'TOTAL':=<15} ${total:>8.2f}")
 
-
-# --- Demo ---
-tracker = ExpenseTracker(Path("demo_expenses.json"))
-tracker.add(12.50, "food", "Lunch")
-tracker.add(9.99, "transport", "Bus pass")
-tracker.add(45.00, "food", "Groceries")
-tracker.add(14.99, "entertainment", "Netflix")
-tracker.add(8.50, "food", "Coffee and snack")
-tracker.report()
-tracker.export_csv("expenses_export.csv")
+# Demo
+t = ExpenseTracker(Path("demo.json"))
+t.add(12.50, "food", "Lunch"); t.add(45.00, "food", "Groceries")
+t.add(9.99, "transport", "Bus"); t.add(14.99, "subscriptions", "Netflix")
+t.report(); t.export_csv(Path("expenses.csv"))
 ```
+
+---
+
+## Interview Prep — Top Questions for File Handling and Exceptions
+
+**Q1: What is the difference between `Exception` and `BaseException`?**
+`BaseException` is the root of all exceptions including `SystemExit`, `KeyboardInterrupt`, and `GeneratorExit` — which should generally propagate unhandled. `Exception` is the base for all **application-level** errors. Always catch `Exception` (or more specific subclasses), never `BaseException` — and never bare `except:` which catches everything including Ctrl+C.
+
+**Q2: When does the `else` block of a `try` statement execute?**
+Only when **no exception** was raised in the `try` block. It does NOT run if an exception was raised, even if caught. Use it for code that should only run on success. The `finally` block runs always. Pattern: `try` (risky) → `except` (handle error) → `else` (success work) → `finally` (cleanup always).
+
+**Q3: What is exception chaining (`raise X from Y`)?**
+`raise NewError("msg") from original_error` sets `__cause__` on the new exception, preserving the full traceback of the original. Without `from`, the original is lost or shown as `__context__`. Always chain exceptions when translating low-level errors to domain-level errors. In tracebacks, Python shows: "The above exception was the direct cause of the following exception".
+
+**Q4: How do context managers work? What are `__enter__` and `__exit__`?**
+A context manager implements `__enter__` (setup, returns value for `as`) and `__exit__(exc_type, exc_val, exc_tb)` (cleanup). The `with` statement calls `__enter__` on entry and `__exit__` on exit — even if an exception occurs. If `__exit__` returns `True`, the exception is suppressed. Use `@contextlib.contextmanager` for simpler generator-based context managers.
+
+**Q5: What is an atomic write and why is it important in production?**
+Write to a temporary file first, then `os.rename()` (atomic on POSIX) to the target path. This ensures readers never see a partially-written file. Without atomic writes: if the process crashes mid-write, the file is corrupted. Critical for: config files, checkpoints, any file read concurrently.
+
+**Q6: What is NDJSON and why is it used for log files instead of JSON arrays?**
+NDJSON (Newline-Delimited JSON) writes one JSON object per line. If the process crashes, all previously-written lines remain valid. A JSON array needs a closing `]` — a crash leaves it invalid and unparseable. NDJSON supports streaming reads (process line by line) and appending (just write another line). Used in: audit logs, event streams, data pipelines.
+
+**Q7: How do you design a custom exception hierarchy for an application?**
+Create a base `AppError(Exception)` for your app, then specific subclasses: `ValidationError`, `NotFoundError`, `AuthError`, `StorageError`. Callers can catch at any specificity level. Each subclass stores relevant context (`field`, `resource`, `status_code`). Map to HTTP status codes at the API boundary. This is the standard pattern at every professional Python shop.
 
 ---
 
 ## Module Summary
 
-| Concept | Key Takeaway |
-|---------|-------------|
-| `with open(...)` | Always use context managers for file I/O |
-| `pathlib.Path` | Modern, cross-platform path handling |
-| `encoding="utf-8"` | Always specify encoding explicitly |
-| `try/except/else/finally` | `else` = success only; `finally` = always |
-| Custom exceptions | Create hierarchies from `Exception`; add context |
-| Exception chaining | `raise X from Y` preserves original cause |
-| Bare `except:` | Never use — catches `SystemExit` and `KeyboardInterrupt` |
-| `@contextmanager` | Simplest way to write a custom context manager |
+| Concept | Key Takeaway | System Design Use |
+|---------|-------------|-------------------|
+| `with open()` | Always use — guarantees file.close() | Resource management in any I/O-heavy system |
+| `pathlib.Path` | Cross-platform, object-oriented paths | All file path manipulation |
+| `encoding="utf-8"` | Always specify — avoid platform surprises | International data, Docker portability |
+| `try/except/else/finally` | else=success only; finally=always | Transaction handling, resource cleanup |
+| Custom exception hierarchy | Fine-grained error handling for callers | API error codes, service boundaries |
+| Exception chaining (`from e`) | Preserves original cause in tracebacks | Debugging across service layers |
+| Atomic write | Write to temp, rename — prevents corruption | Config updates, checkpoints |
+| Append-only log (NDJSON) | One JSON per line — crash-safe | Audit logs, event sourcing |
+| `@contextmanager` | Simple generator-based context manager | DB transactions, locks, timers |
 
 ---
 
 ## Quiz
 
-1. Why must you always use `with open(...)` instead of bare `open()`?
-2. What is the difference between `f.read()`, `f.readline()`, and `f.readlines()`?
-3. When does the `else` block of a try/except execute?
-4. What does `raise ValueError("msg") from original_error` do?
-5. What is the difference between `except Exception:` and bare `except:`?
-6. How do you create a directory tree with `pathlib`, creating parents if needed?
-7. What is name-mangling in Python exceptions? Give an example.
-8. What does `Path.glob("**/*.py")` match?
-9. How do you make a custom context manager using a generator function?
-10. Why should you never use `except: pass`?
+1. What happens if an exception occurs inside a `with open(...)` block — is the file closed?
+2. What is the difference between `f.read()`, `f.readline()`, and iterating `for line in f`?
+3. When does the `else` block of a `try/except` run? When does `finally` run?
+4. What does `raise ValueError("msg") from original_error` do that `raise ValueError("msg")` doesn't?
+5. Why should you never use a bare `except:` clause?
+6. What does `Path("a") / "b" / "c.txt"` produce? Why is this better than `os.path.join`?
+7. Why use `open(path, "x")` instead of `open(path, "w")` when creating a new file?
+8. How does NDJSON (newline-delimited JSON) make log files more robust than a single JSON array?
+9. In `__exit__(self, exc_type, exc_val, exc_tb)`, what does returning `True` do?
+10. You're writing a config loader. The file might not exist, might be invalid JSON, or might be missing required keys. Design the exception hierarchy and write the loader.
+
+**Answers:**
+1. Yes — `with` guarantees `__exit__()` runs, which closes the file, even if an exception propagates.
+2. `f.read()` loads the entire file into one string. `f.readline()` reads one line. `for line in f` is a lazy iterator — reads one line at a time using minimal memory (best for large files).
+3. `else` runs only when no exception was raised in the `try` block. `finally` runs unconditionally — whether or not an exception occurred.
+4. `from original_error` sets `__cause__` on the new exception, preserving the full original traceback. Without it, the original error context is partially hidden.
+5. Bare `except:` catches `SystemExit`, `KeyboardInterrupt`, and `GeneratorExit` — which should normally propagate. It also silences bugs you haven't anticipated.
+6. `Path("a/b/c.txt")` — a `Path` object. The `/` operator is overloaded and always uses the correct OS separator. It's also an object with methods, not just a string.
+7. `"x"` (exclusive create) raises `FileExistsError` if the file already exists — preventing accidental overwrites. `"w"` silently truncates and replaces any existing file.
+8. NDJSON: if the process crashes mid-write, all previously written lines are still valid. A JSON array must have the closing `]` — a crash mid-write produces invalid JSON.
+9. Returning `True` from `__exit__` **suppresses** the exception — it does not propagate. Usually wrong; return `False` or `None` to let exceptions propagate normally.
+10. Hierarchy: `AppError → ConfigError`. Loader: catch `FileNotFoundError` → raise `ConfigError("not found") from e`; catch `JSONDecodeError` → raise `ConfigError("invalid JSON") from e`; check required keys → raise `ConfigError("missing keys: ...")` directly.

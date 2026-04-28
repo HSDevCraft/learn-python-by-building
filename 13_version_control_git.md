@@ -502,6 +502,35 @@ Set up a Python project with pre-commit hooks that run: `ruff`, `ruff-format`, a
 
 ---
 
+## Interview Prep — Top Questions for Git and Version Control
+
+**Q1: Explain Git's data model. What is a commit really?**
+Git stores snapshots, not diffs. A **commit** is a SHA-1 hash of: a tree object (directory snapshot), parent commit hash(es), author/committer metadata, and message. A **tree** maps filenames to blob hashes. A **blob** stores raw file content. Branches are just named pointers (refs) to commits. The entire history is an immutable, content-addressed DAG (Directed Acyclic Graph). Understanding this makes `reset`, `rebase`, and `reflog` intuitive.
+
+**Q2: What is the difference between `git merge` and `git rebase`?**
+`git merge` creates a **merge commit** joining two branches — preserves full history with the fork point visible. `git rebase` **replays** your commits on top of another branch, rewriting history to be linear. Rebase makes history cleaner but changes commit SHAs. Rule: rebase local feature branches before merging; never rebase shared/public branches.
+
+**Q3: What is `git reset --soft` vs `--mixed` vs `--hard`?**
+- `--soft HEAD~1`: Undo the commit, keep changes staged
+- `--mixed HEAD~1` (default): Undo commit AND unstage changes, keep files
+- `--hard HEAD~1`: Undo commit, unstage, AND discard file changes — **destructive**
+Never `--hard` on pushed commits. Use `git revert` to undo pushed commits safely.
+
+**Q4: What are pre-commit hooks and how do they improve code quality?**
+Git hooks are scripts that run at specific Git events. Pre-commit hooks run before `git commit` completes. The `pre-commit` framework manages hooks declaratively in `.pre-commit-config.yaml`. Typical hooks: `ruff` (linting), `black`/`ruff-format` (formatting), `mypy` (type checking), `detect-secrets` (no credentials). They catch issues before code reaches CI — shift-left on quality.
+
+**Q5: What is a GitHub Actions CI/CD pipeline?**
+GitHub Actions runs workflows (YAML files in `.github/workflows/`) triggered by events (push, PR, schedule). Each workflow has jobs (parallel/sequential) with steps (shell commands or Actions). Typical Python CI: checkout → setup Python → install deps → lint (ruff) → type-check (mypy) → test (pytest --cov) → optional deploy. Ensures every PR meets quality standards before merging.
+
+**Q6: When would you use `git revert` instead of `git reset`?**
+Use `git revert <commit>` when the commit has **already been pushed** to a shared branch. `revert` creates a new commit that undoes the changes — history is preserved, safe for collaborators. Use `git reset` only for **local unpushed commits**. `reset` rewrites history; if you force-push, collaborators' local copies diverge.
+
+**Q7: What is the Git branching strategy for a team? Describe GitFlow vs trunk-based development.**
+- **GitFlow**: `main` + `develop` + `feature/*` + `release/*` + `hotfix/*`. Good for versioned software with scheduled releases. Complex.
+- **Trunk-based**: All developers integrate to `main` frequently (daily). Feature flags hide incomplete work. Simpler, enables CI/CD. Preferred by Google, Netflix, Etsy. Feature branches are short-lived (hours, not weeks).
+
+---
+
 ## Module Summary
 
 | Concept | Key Takeaway |
@@ -529,3 +558,15 @@ Set up a Python project with pre-commit hooks that run: `ruff`, `ruff-format`, a
 8. What does `git bisect` help you find?
 9. What is a `.gitignore` file and where should it be committed?
 10. What does `git reflog` show that `git log` does not?
+
+**Answers:**
+1. `git merge` creates a new **merge commit** that joins two branch histories — preserves full history with the fork point visible. `git rebase` replays your commits on top of the target branch, creating a **linear history** without merge commits. Use merge for shared branches (main, develop); use rebase to clean up local feature branches before a PR.
+2. `git reset --soft HEAD~1` moves the HEAD pointer back one commit but **keeps all changes staged**. Your working directory is unchanged; the files are still modified and ready to recommit. Useful for amending the last commit message or squashing multiple commits.
+3. `git reset --hard` rewrites history. If teammates have pulled those commits, their local history diverges from yours. Force-pushing (`git push --force`) will overwrite their work. On shared branches, always use `git revert` (which creates a new commit) instead.
+4. `git stash` saves your uncommitted changes to a temporary stack and reverts the working directory to HEAD. Use it when you need to switch branches to fix a hotfix but aren't ready to commit your current work. Restore with `git stash pop` (removes from stack) or `git stash apply` (keeps in stack).
+5. A fast-forward merge occurs when the target branch (e.g., `main`) has no new commits since the feature branch diverged — the branch pointer simply moves forward along the linear history. No merge commit is created. GitHub/GitLab can be configured to always fast-forward or always create a merge commit.
+6. `git add -p` (patch mode) interactively shows each change **hunk by hunk** and lets you choose which to stage. Useful for making atomic commits — staging only the changes related to one logical fix, even if the file contains other changes. Press `y` to stage a hunk, `n` to skip, `s` to split further.
+7. Use `git revert` when you need to undo a commit that has **already been pushed to a shared branch**. `revert` creates a new commit that reverses the changes — safe for shared history. Use `git reset` only for **local commits not yet pushed** — it rewrites history which is unsafe for shared branches.
+8. `git bisect` performs a **binary search through commit history** to find the exact commit that introduced a bug. You mark a known-bad commit and a known-good commit; git checks out the midpoint, you test, mark good/bad, and git narrows down to the culprit commit in O(log n) steps.
+9. `.gitignore` specifies files and patterns that Git should **not track** (venv, `__pycache__`, `.env`, `dist/`, IDE config). It should be committed to the repository so all contributors share the same ignore rules. Place project-level ignores in `.gitignore`; personal ignores in `~/.gitignore_global`.
+10. `git reflog` shows the **history of where HEAD has pointed** — including commits that are no longer reachable from any branch (after a reset, rebase, or branch deletion). `git log` only shows commits reachable from the current branch. `reflog` is your safety net for recovering "lost" commits after a `git reset --hard`.
