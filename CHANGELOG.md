@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Exercises with full solutions
   - Module summaries
   - 10-question quizzes with answers
-- GitHub-ready structure with CI/CD workflows
+- GitHub-ready structure
 - Contributing guidelines
 - MIT License
 

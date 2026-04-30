@@ -2,7 +2,6 @@
 
 > A comprehensive, end-to-end Python course for software development, data science, and AI roles.
 
-[![CI](https://github.com/yourusername/python-course/workflows/CI/badge.svg)](https://github.com/yourusername/python-course/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.8+](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/downloads/)
 [![Modules: 15](https://img.shields.io/badge/Modules-15-brightgreen)](./README.md)
