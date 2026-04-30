@@ -520,7 +520,7 @@ Never `--hard` on pushed commits. Use `git revert` to undo pushed commits safely
 Git hooks are scripts that run at specific Git events. Pre-commit hooks run before `git commit` completes. The `pre-commit` framework manages hooks declaratively in `.pre-commit-config.yaml`. Typical hooks: `ruff` (linting), `black`/`ruff-format` (formatting), `mypy` (type checking), `detect-secrets` (no credentials). They catch issues before code reaches CI — shift-left on quality.
 
 **Q5: What is a GitHub Actions CI/CD pipeline?**
-GitHub Actions runs workflows (YAML files in `.github/workflows/`) triggered by events (push, PR, schedule). Each workflow has jobs (parallel/sequential) with steps (shell commands or Actions). Typical Python CI: checkout → setup Python → install deps → lint (ruff) → type-check (mypy) → test (pytest --cov) → optional deploy. Ensures every PR meets quality standards before merging.
+GitHub Actions runs workflows (YAML files in `.github/workflows/`) triggered by events (push, PR, schedule). Each workflow has jobs (parallel/sequential) with steps (shell commands or Actions). Typical Python CI: checkout → setup Python → install deps → lint (ruff) → type-check (mypy) → test (pytest --cov) → optional deploy. This ensures every PR meets quality standards before merging.
 
 **Q6: When would you use `git revert` instead of `git reset`?**
 Use `git revert <commit>` when the commit has **already been pushed** to a shared branch. `revert` creates a new commit that undoes the changes — history is preserved, safe for collaborators. Use `git reset` only for **local unpushed commits**. `reset` rewrites history; if you force-push, collaborators' local copies diverge.

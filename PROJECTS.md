@@ -724,7 +724,6 @@ Complexity:
 - `CHANGELOG.md` (Conventional Commits style)
 - `.github/ISSUE_TEMPLATE/` (bug report + feature request)
 - `.github/PULL_REQUEST_TEMPLATE.md`
-- `.github/workflows/ci.yml` and `release.yml`
 - MIT `LICENSE`
 - Published to TestPyPI (optionally real PyPI)
 - `pyproject.toml` with entry point: `pyinspect = "pyinspect.cli:main"`

@@ -504,7 +504,7 @@ volumes:
 ## 14.6 CI/CD with GitHub Actions
 
 ```yaml
-# .github/workflows/ci.yml
+# Example .github/workflows/ci.yml (not included in this course)
 name: CI
 
 on:
